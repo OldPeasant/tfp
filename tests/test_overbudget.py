@@ -88,7 +88,7 @@ class Board(unittest.TestCase):
         sh(clone, "git", "config", "user.name", name)
 
     def tp(self, *a, who=None, avoid=None, check=True):
-        env = {k: v for k, v in os.environ.items() if k not in ("TASK_OWNER", "TASK_AVOID", "TASK_LEASE")}
+        env = {k: v for k, v in os.environ.items() if k not in ("TASK_OWNER", "TASK_AVOID", "TASK_LEASE") and not k.startswith("TASKS_")}
         env["TASKS_ROOT"] = str(self.w)
         if who:
             env["TASK_OWNER"] = who

@@ -3,6 +3,7 @@
 # status changes (claim, assume, extend, freeze, hold, split) must never push unfinished local code
 # commits to main; only `done` pushes code. Run: bash tests/test_publish.sh  (needs git and python3)
 set -u
+unset TASKS_ROOT TASK_OWNER TASK_LEASE TASK_AVOID TASK_CHECK  # an agent runner's settings must not leak in
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT

@@ -33,7 +33,7 @@ class Assumptions(unittest.TestCase):
             self.tp("assume", "api", text, who="dell/agent-1")
 
     def tp(self, *a, who=None, check=True):
-        env = {k: v for k, v in os.environ.items() if k != "TASK_OWNER"}
+        env = {k: v for k, v in os.environ.items() if k != "TASK_OWNER" and not k.startswith("TASKS_")}
         if who:
             env["TASK_OWNER"] = who
         return sh(self.w, sys.executable, "tasks.py", *a, env=env, check=check)

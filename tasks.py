@@ -245,8 +245,20 @@ def problems(ts):
     return out
 
 
+def skipped_here():
+    """Paths this machine can't work on (TASK_SKIP_TOUCHES, comma-separated, e.g. `android` where no
+    Android SDK is installed): tasks touching any of them are never offered or claimed here."""
+    return [p.strip() for p in os.environ.get("TASK_SKIP_TOUCHES", "").split(",") if p.strip()]
+
+
+def skipped(t):
+    """The TASK_SKIP_TOUCHES paths task t touches ([] = it can be done here)."""
+    skip = skipped_here()
+    return overlaps(t["touches"], skip) if skip and t["touches"] else []
+
+
 def ranked(ts):
-    r = [t for t in ts.values() if t["ready"]]
+    r = [t for t in ts.values() if t["ready"] and not skipped(t)]
     return sorted(r, key=lambda t: (-t["dependents"], t["prio"], t["id"]))
 
 
@@ -558,6 +570,9 @@ def cmd_claim(a):
             return f"{tid} is on hold: {t['hold']}"
         if not t["ready"] and not a.force:
             return f"{tid} has unfinished dependencies: {[d for d in t['deps'] if ts.get(d, {}).get('status') != 'done']}"
+        if skipped(t) and not a.force:
+            return (f"{tid} touches {', '.join(skipped(t))}, which this machine skips (TASK_SKIP_TOUCHES): "
+                    "leave it to another machine. Pick another task: python tasks.py next")
         prev["owner"] = t["owner"] if t["stale"] else ""
         return None
 

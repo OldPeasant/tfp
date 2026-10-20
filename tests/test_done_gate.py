@@ -50,7 +50,7 @@ class Board(unittest.TestCase):
         sh(self.w, "git", "push", "-q", "-u", "origin", "main")
 
     def tp(self, *a, who="agent-1", check=True, **env):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("TASK_")}
+        e = {k: v for k, v in os.environ.items() if not k.startswith(("TASK_", "TASKS_"))}
         e.update(TASK_OWNER=who, **env)
         return sh(self.w, sys.executable, "tasks.py", *a, env=e, check=check)
 

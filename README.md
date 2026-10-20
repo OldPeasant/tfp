@@ -197,3 +197,7 @@ handled the same way and show as "paused". Check the log in that case.
 
 Humans can use the same commands (`next`, `claim`, `done`) or claim tasks for themselves with
 `TASK_OWNER=alice`.
+
+A laptop that can't build part of the project (e.g. no Android SDK) sets `TASK_SKIP_TOUCHES=android`
+(comma-separated paths) before starting its agents: `next`, `claim` and the runner then leave tasks whose
+`touches` overlap those paths to other machines (`claim --force` overrides).
