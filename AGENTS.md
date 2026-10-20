@@ -7,20 +7,44 @@ Work is tracked in `tasks/*.md`, one file per task. Git is the only source of tr
 2. `python tasks.py claim <id>` - atomic. If it prints `LOST RACE`, go back to step 1.
    Do not start work before you see `CLAIMED`. If it says earlier unfinished work exists on
    `origin/wip/<id>` (its previous owner died or released it), merge that first and continue from it.
+   If it prints `Heads-up: <other> ... touches the same files`, another agent is changing the same code
+   right now: read its task, don't redo what it does, keep your changes there small, and pull often.
 3. Implement only what the task's acceptance criteria say. Commit code often (the agent runner backs up
    your commits to `wip/<id>`) and run `git pull --rebase` every few commits, so conflicts with other
    agents show up early and small. Never `git push` to main yourself: `done` pushes your work once it
    passes the check, so main only ever holds finished tasks (it is published to the original repos).
-4. `python tasks.py done <id>` when all criteria are met. It merges the latest main, runs the project
-   check (`.taskcheck`) on the merged result, and only then marks the task done and pushes. If the
-   check fails, fix it and run `done` again. Then go to step 1.
-5. Stuck or abandoning? Commit your work, then `python tasks.py release <id> --note "<what is done, what blocks>"`.
+4. Verify every acceptance criterion and record how (see "Evidence" below):
+   `python tasks.py verify <id> <n> "<what you ran> -> <result>"` (`verify <id>` lists them, numbered).
+5. `python tasks.py done <id>` when all criteria are met and verified. It refuses while a criterion is
+   unverified, then merges the latest main, runs the project check (`.taskcheck`) on the merged result,
+   and only then marks the task done and pushes. If the check fails, fix it and run `done` again. If it
+   times out, see "Evidence". Then go to step 1.
+6. Stuck or abandoning? Commit your work, then `python tasks.py release <id> --note "<what is done, what blocks>"`.
    Your unfinished commits go to `wip/<id>` for the next owner, not to main.
-6. Missing task discovered? `python tasks.py new <id> "<title>" --deps a,b`, commit, push.
-7. If any command prints `REFUSED` or `LOST`, the task was taken over by someone else (your lease
+7. Missing task discovered? `python tasks.py new <id> "<title>" --deps a,b --touches <folders/files>`,
+   commit, push. `--touches` names what the task will change, so agents avoid working on two tasks that
+   touch the same files at the same time; `python tasks.py check` warns about such tasks without a dep.
+8. If any command prints `REFUSED` or `LOST`, the task was taken over by someone else (your lease
    expired) or a human changed the plan (dropped it or put it on hold): stop working on it immediately.
-8. If `next` or `claim` prints `FROZEN`, humans are changing the plan: finish a task you already own,
+9. If `next` or `claim` prints `FROZEN`, humans are changing the plan: finish a task you already own,
    but claim nothing new. Stop.
+## Evidence
+A criterion is met only when you saw it work. `verify` records what you ran and what came out, so a
+human can trust a done task without redoing it:
+- **Run what the criterion names.** "E2E tests pass" needs the browser tests run against the stack the
+  criterion names (e.g. the real login, not a dev shortcut), "the image builds" needs the actual build
+  path that CI or deployment uses (same runtime versions), "works on Windows" needs Windows. Tests that
+  were found but not run, a passing unit suite for a browser criterion, a build with a different tool
+  or runtime, or "should work" is not evidence.
+- **Write the evidence so it can be repeated:** command, configuration, result
+  (`npx playwright test --project=chromium against docker compose up -> 8 passed`).
+- **Can't verify it here** (no browser, no Docker, a service you can't reach)? Don't tick it:
+  `python tasks.py verify <id> <n> --skip "<why>"`, plus `python tasks.py assume <id> "..."` for what
+  you assumed instead. If the task is pointless without it, `hold` it.
+- **The check must finish.** `done` gives `.taskcheck` 15 min (`TASK_CHECK_TIMEOUT`) and warns above
+  2 min. A check that times out verified nothing: if your change made it hang (a server left running, a
+  test waiting for input), fix that; if the check itself is too slow, hold the task and say so.
+
 ## Quality gate before completing implementation tasks
 
 For implementation tasks, the parent TFP worker owns the task from claim through completion.
@@ -40,8 +64,11 @@ Before running `tasks.py done`, the parent worker must complete this quality wor
 4. If the test-writer or code-reviewer reports valid issues, invoke the `fixer` sub-agent to resolve them.
 5. Re-run relevant tests after fixes.
 6. If material fixes were made, re-run `code-reviewer` when useful to confirm the issues are resolved.
-7. Run `.taskcheck`.
-8. Only when required behavior is implemented, important findings are resolved, and `.taskcheck` passes may the parent worker run `tasks.py done`.
+7. Record the evidence for each acceptance criterion with `tasks.py verify` (see "Evidence"), using
+   what you and the helpers actually ran.
+8. Run `.taskcheck`.
+9. Only when required behavior is implemented, important findings are resolved, every criterion is
+   verified (or skipped with a reason) and `.taskcheck` passes may the parent worker run `tasks.py done`.
 
 ### Quality sub-agent boundaries
 
@@ -66,6 +93,7 @@ The parent TFP worker remains responsible for:
 - holds;
 - releases;
 - deciding whether a finding is in scope;
+- recording evidence (`tasks.py verify`);
 - running final validation;
 - completing the task.
 

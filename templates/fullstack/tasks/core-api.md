@@ -3,6 +3,7 @@ title: CRUD endpoints for the main entities
 status: todo
 owner:
 deps: [data-model, api-contract]
+touches: [backend/api]
 prio: 1
 ---
 ## Goal

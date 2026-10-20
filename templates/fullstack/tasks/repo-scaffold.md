@@ -3,6 +3,7 @@ title: Scaffold backend and frontend skeletons
 status: todo
 owner:
 deps: [stack]
+touches: [backend, frontend, Makefile, README.md]
 prio: 1
 ---
 ## Goal

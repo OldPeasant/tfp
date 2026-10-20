@@ -71,7 +71,9 @@ Commit often: your commits are backed up so another agent can continue if this m
 immediately.
 Nobody answers questions at night: when something is unclear, choose the most reasonable option, record it
 with `python tasks.py assume <id> "<what you assumed and why>"`, and carry on.
-Do exactly ONE task, then stop. Finish with `python tasks.py done <id>`: it merges the latest main,
+Do exactly ONE task, then stop. Before finishing, verify each acceptance criterion by actually running
+what it names and record it: `python tasks.py verify <id> <n> "<what you ran> -> <result>"` (AGENTS.md
+"Evidence"; a test that was found but not run is no evidence). Finish with `python tasks.py done <id>`: it merges the latest main,
 runs the project check on the result and pushes; you are finished only when it prints DONE. If you cannot finish, commit what you
 have and run `python tasks.py release <id> --note "<what is done, what blocks>"` (your commits then go
 to wip/<id>, not main)."""
@@ -99,7 +101,7 @@ JOB_NEW = "Run `python tasks.py claim` (no id = best ready task). If it reports 
 
 
 def sh(*a, cwd=None, env=None):
-    return subprocess.run(a, cwd=cwd, capture_output=True, text=True, env=env)
+    return subprocess.run(a, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
 
 
 def git_in(cwd, data, *a):

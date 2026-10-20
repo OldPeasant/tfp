@@ -3,6 +3,7 @@ title: Database schema and migrations
 status: todo
 owner:
 deps: [api-contract, repo-scaffold]
+touches: [backend/db]
 prio: 1
 ---
 ## Goal

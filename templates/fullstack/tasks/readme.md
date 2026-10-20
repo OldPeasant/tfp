@@ -2,7 +2,8 @@
 title: Final README with setup, architecture, and AI usage story
 status: todo
 owner:
-deps: [spec, stack]
+deps: [spec, stack, repo-scaffold]
+touches: [README.md]
 prio: 3
 ---
 ## Goal

@@ -3,6 +3,7 @@ title: Turn the contest brief into SPEC.md
 status: todo
 owner:
 deps: []
+touches: [SPEC.md]
 prio: 1
 ---
 ## Goal

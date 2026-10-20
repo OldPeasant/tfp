@@ -3,6 +3,7 @@ title: Core domain logic (the heart of the product)
 status: todo
 owner:
 deps: [core-api]
+touches: [backend/services]
 prio: 1
 ---
 ## Goal

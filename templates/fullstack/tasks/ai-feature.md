@@ -3,6 +3,7 @@ title: AI feature behind a provider interface
 status: todo
 owner:
 deps: [api-contract, repo-scaffold]
+touches: [backend/ai]
 prio: 1
 ---
 ## Goal

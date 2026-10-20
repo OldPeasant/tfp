@@ -3,6 +3,7 @@ title: Write the API contract (openapi.yaml)
 status: todo
 owner:
 deps: [spec, stack]
+touches: [openapi.yaml]
 prio: 1
 ---
 ## Goal

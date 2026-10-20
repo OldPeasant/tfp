@@ -5,7 +5,7 @@ Needs only Python 3 and git.
 
 | File | Purpose |
 |---|---|
-| `tasks.py` | task CLI: `new list next claim done release redo extend split hold unhold drop undrop freeze unfreeze assume assumptions confirm reject heartbeat check status graph watch repos` |
+| `tasks.py` | task CLI: `new list next claim verify done release redo extend split hold unhold drop undrop freeze unfreeze assume assumptions confirm reject heartbeat check status graph watch repos` |
 | `board.py` | the dashboard behind `tasks.py watch` / `graph` |
 | `repos.py` | `tasks.py repos`: work on several repos as folders of one repo, synced back to them |
 | `templates/gitlab-ci-sync.yml` | GitLab CI job that runs the repo sync every 30 min |
@@ -13,6 +13,7 @@ Needs only Python 3 and git.
 | `AGENTS.md` | protocol the agents read (copy into the project) |
 | `templates/fullstack/tasks/` | 22-task starter set for a typical full-stack + AI app |
 | `tests/test_publish.sh` | scenario tests: status changes never push unfinished code to main (`bash tests/test_publish.sh`) |
+| `tests/test_*.py` | tests for evidence, check limits, `touches`, assumptions, over-budget tasks (`python3 tests/test_done_gate.py`, ...) |
 
 ## Contest quick start
 The setup below is for work that spans several existing repos (e.g. frontend + backend on GitLab, maybe
@@ -51,8 +52,10 @@ python tasks.py check && git add -A && git commit -m "task board" && git push
 ```
 Edit the template first. The repos already exist, so drop or rewrite `repo-scaffold` and the tasks
 that set up what is already there. Delete tasks you don't need (e.g. auth, AI), add domain-specific
-ones, and remove deleted ids from other tasks' `deps`. Keep `.taskcheck` fast (< 2 min): it runs on
-every `done` and every sync.
+ones, and remove deleted ids from other tasks' `deps`. Give each task `touches:` (the folders/files it
+changes) and write acceptance criteria that say how they are verified ("passes against the real login",
+"`docker build` succeeds"), see "Done means verified". Keep `.taskcheck` fast (< 2 min): it runs on
+every `done` and every sync; `done` warns above 2 min and gives up after 15.
 
 **5. Start agents** on each laptop (in a clone of the working repo):
 ```bash
@@ -97,6 +100,32 @@ rewrites `board.html`, which reloads itself. It never touches your working tree.
 The "doing" line comes from the runner: it reads Claude's `stream-json` output as it arrives and
 force-pushes a one-commit `status/<host>/agent-N` branch every 10-60 s, so main's history is untouched.
 `--once` writes the page once; `tasks.py graph` writes it from your local checkout, plus `BOARD.md`.
+
+## Done means verified
+A task is done when each acceptance criterion was seen to work, not when the code looks finished. The
+agent records the evidence per criterion, in the task file next to it:
+```bash
+python tasks.py verify api 2 "npx playwright test login against docker compose up -> 8 passed"
+python tasks.py verify api 3 --skip "no Docker on this laptop"     # not met/verifiable here: why
+```
+`done` refuses while a criterion is unverified (`- [ ]`; `--force` overrides), and adds a line with the
+check it ran, the commit and how many criteria were verified or skipped. Skipped criteria (`- [~]`) stay
+visible in the file for a human to follow up. AGENTS.md "Evidence" tells agents what counts: the thing
+the criterion names actually ran (browser tests executed, the real build path used), with command and
+result; tests that were only found, or "should work", don't count.
+
+`done` gives the check `TASK_CHECK_TIMEOUT` seconds (default 900), then kills it and everything it
+started and refuses: a check that never ends verifies nothing. Above `TASK_CHECK_SLOW` (default 120 s)
+it warns. The check's output is read as UTF-8 and printed safely on any console, so a failure is never
+hidden behind an encoding error (e.g. a Windows cp1252 console).
+
+## Tasks that touch the same files
+`touches: [frontend/src/app/state, docs/adr]` in a task file (or `new --touches a,b`) names what it
+changes. Paths overlap when one is inside the other. While someone works on a task, `next` and `claim`
+(without an id) offer tasks that overlap it last and say why; claiming one anyway prints a heads-up
+naming the other task. `tasks.py check` warns about unfinished tasks that overlap but may run in
+parallel (neither depends on the other): add a dep, or split the files. Tasks without `touches` are
+never treated as overlapping.
 
 ## Merge conflicts and the check
 Put the project's validation command in `.taskcheck` (one line, e.g. `make check`; the `checks` task

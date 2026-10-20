@@ -111,7 +111,11 @@ takes a few hours, most of it in phases C and D. Don't start phase D before I ap
 2. Make one fast check (< 2 min) that runs lint + tests of all folders, and put the command in
    `.taskcheck`. It always runs in `sh` (on Windows: Git for Windows' bash), but tools like `make`
    are missing on Windows, so prefer e.g. `npm run check` or a small script. Run it and fix it until
-   it passes on a clean clone. Everything the check needs (JDK, Node version, Docker...) goes into the
+   it passes on a clean clone, and time it: `done` warns above 2 min and gives up after 15
+   (`TASK_CHECK_TIMEOUT`). Slow suites (browser e2e, container builds) don't belong in it: give them
+   their own tasks, whose criteria require running them. Make sure every path that builds or ships
+   the code (CI jobs, Docker/Gradle/Maven builds that download their own Node or JDK) uses the same
+   runtime versions as the check; note any mismatch as a task. Everything the check needs (JDK, Node version, Docker...) goes into the
    "Install" section and TEAM.md: an agent whose check can't run puts its task on hold.
 3. Configure code coverage for the project's test stack.
    Detect the test framework already chosen for the project and use its standard coverage tooling.
@@ -154,8 +158,15 @@ changes, out of scope, open questions. Show it to me until I say "approved". Com
 Replace the template tasks with ones derived from SPEC.md (`python tasks.py new ...`, then write
 Goal / Acceptance criteria into each file). Rules for good tasks:
 - One agent, 30–90 min, one clear outcome. Acceptance criteria are checkable, and tests are included.
+  Agents must `verify` each criterion with what they ran before `done` accepts the task, so say how it
+  is verified where that isn't obvious: "e2e login test passes against Keycloak (not the dev login)",
+  "`docker build` succeeds with the CI runtime", "late response of an older request is ignored
+  (test reverses the order)". Something agents can't run (a real device, production) is a human task.
 - Contract first: API/data model tasks come before the backend and frontend tasks that use them.
-- Two tasks that could run in parallel must not edit the same files. Split or add a dep if they would.
+- Two tasks that could run in parallel must not edit the same files. Give every task `touches:` (the
+  folders/files it changes); `python tasks.py check` then warns about overlapping tasks without a dep
+  between them. Add a dep, merge them, or split the files. Several fixes in one store or module are
+  usually one task, or a chain.
 - `deps` only where really needed. The board must be wide enough to keep all agents busy
   (count: agents on all laptops).
 - `prio: 1` for the demo-critical path. End with demo polish, README and a final smoke test.

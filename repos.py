@@ -226,7 +226,7 @@ def sync_round(T, a):
         cmd = None if a.skip_check else T.check_cmd()
         if todo and cmd:
             print(f"checking {head[:9]}: {cmd}", flush=True)
-            p = T.run_check(cmd)
+            p = T.run_check(cmd, T.check_limits()[0])
             if p.returncode:
                 tail = " | ".join((p.stdout + p.stderr).strip().splitlines()[-3:])[-300:]
                 for r in todo:

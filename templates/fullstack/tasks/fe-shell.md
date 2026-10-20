@@ -3,6 +3,7 @@ title: Frontend shell: layout, routing, typed API client
 status: todo
 owner:
 deps: [repo-scaffold, api-contract]
+touches: [frontend/src/app/layout, frontend/src/app/api]
 prio: 1
 ---
 ## Goal

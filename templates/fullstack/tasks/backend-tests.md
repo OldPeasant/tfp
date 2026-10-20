@@ -3,6 +3,7 @@ title: Backend integration tests for critical paths
 status: todo
 owner:
 deps: [core-logic, auth-backend]
+touches: [backend/tests]
 prio: 3
 ---
 ## Goal

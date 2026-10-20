@@ -3,6 +3,7 @@ title: Seed / demo data
 status: todo
 owner:
 deps: [data-model]
+touches: [backend/seed]
 prio: 3
 ---
 ## Goal

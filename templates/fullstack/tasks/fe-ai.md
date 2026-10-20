@@ -3,6 +3,7 @@ title: Frontend: AI feature UI
 status: todo
 owner:
 deps: [fe-shell, ai-feature]
+touches: [frontend/src/app/ai]
 prio: 1
 ---
 ## Goal

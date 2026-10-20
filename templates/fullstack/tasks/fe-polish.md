@@ -2,7 +2,8 @@
 title: Frontend polish: responsive, accessible, pretty
 status: todo
 owner:
-deps: [fe-core]
+deps: [fe-core, fe-auth, fe-ai]
+touches: [frontend/src]
 prio: 3
 ---
 ## Goal

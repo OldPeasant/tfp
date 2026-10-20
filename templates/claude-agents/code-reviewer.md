@@ -162,6 +162,19 @@ Check where relevant:
 - assumptions have not silently become permanent product decisions;
 - the implementation does not depend on unfinished future tasks.
 
+Also check these defects, which unit tests often miss:
+
+- out-of-order async results: a slower, older request (search, filter, page, selection) must not
+  overwrite the result of a newer one, also when the older one fails; independent methods writing
+  the same state need a shared cancellation or request identity;
+- loading and error state: every path, including failure, cancellation and clearing the input while
+  a request runs, ends loading and leaves a recoverable screen (error shown, retry possible);
+- overlapping writes: double submits, concurrent create/update/delete; a cancelled write may already
+  have been committed by the server;
+- stored state read back (localStorage, sessionStorage, files, caches): malformed or outdated values
+  and unavailable or full storage must not break startup or a save;
+- the same state or operation owned in two places when the architecture says one owner.
+
 Do not report work that belongs only to future tasks as missing.
 
 # Step 6: Review architecture
@@ -199,7 +212,10 @@ Check where relevant:
 - serialization;
 - frontend/backend expectations;
 - database or schema expectations;
-- environment variables and configuration.
+- environment variables and configuration;
+- runtime and tool versions: every path that builds or ships the code (CI jobs, Docker, Gradle/Maven
+  builds that download their own Node or JDK) uses versions the installed dependencies support;
+- documentation that describes how to run, test or deploy still matches the configuration.
 
 Skip checks that do not apply to the project.
 
@@ -251,6 +267,17 @@ Verify where applicable:
 - tests assert behavior rather than implementation details;
 - mocks do not hide the behavior being tested;
 - existing tests were not weakened, deleted, or skipped merely to make the suite pass.
+
+Check the evidence for each acceptance criterion (`python tasks.py verify <id>` lists them and what
+has been recorded so far):
+
+- a criterion about running behavior (browser flows, a container build, a deployment, a migration)
+  was actually executed in the configuration it names; tests that were only discovered or listed, a
+  passing unit suite for a browser criterion, or a build through a different path is not evidence;
+- recorded evidence names the command and its result, and matches what you can see in the repository;
+- criteria that could not be verified are marked skipped with a reason, not claimed.
+
+Report a criterion claimed without such evidence as a P1 Tests finding.
 
 If important behavior is untested, report it.
 

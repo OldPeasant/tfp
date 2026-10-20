@@ -3,6 +3,7 @@ title: Demo script and fallback plan
 status: todo
 owner:
 deps: [e2e-smoke, fe-polish, ai-feature]
+touches: [DEMO.md]
 prio: 2
 ---
 ## Goal

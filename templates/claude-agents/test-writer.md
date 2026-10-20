@@ -288,7 +288,19 @@ Where relevant, test:
 - authorization failures;
 - validation failures;
 - unavailable external services;
-- malformed external responses.
+- malformed external responses;
+- malformed or unavailable stored state (storage access throws, invalid JSON, an old format);
+- loading state after failure: the spinner ends and the screen can retry.
+
+## Ordering and concurrency
+
+Where the code starts requests whose results update shared state, test:
+
+- responses arriving in reverse order (an older request answering last, with success and with failure);
+- the input cleared or changed while a request is pending;
+- the same write submitted twice, and overlapping writes to the same item.
+
+Control the order explicitly (subjects, deferred promises, fake timers), never with real delays.
 
 ## Multiple conditions
 
@@ -338,6 +350,11 @@ Each acceptance criterion should have at least one meaningful test where practic
 If an acceptance criterion cannot reasonably be tested, record why.
 
 Do not fake coverage for an untestable requirement.
+
+A criterion about running behavior (browser flows, a build or container path, a deployment) is covered
+only by executing it in the configuration it names. Run it if the environment allows. If it does not
+(no browser, no Docker, a service you cannot reach), mark it "Not run" with the reason: test discovery
+(e.g. `playwright test --list`) is not execution and must never be reported as a pass.
 
 # Step 8: Write the tests
 
@@ -702,9 +719,11 @@ Count: <number>
 
 ## Requirement coverage
 
-| Requirement | Tests | Result |
-|---|---|---|
-| <requirement> | <test names> | Pass / Fail / Not testable |
+| Requirement | Tests | Command | Result |
+|---|---|---|---|
+| <requirement> | <test names> | <command that ran them> | Pass / Fail / Not run: <why> / Not testable |
+
+The parent records these as evidence with `tasks.py verify`, so report only what actually ran.
 
 ## Focused test execution
 

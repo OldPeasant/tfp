@@ -49,13 +49,13 @@ def parse_text(text, tid, path=None):
             if ":" in line:
                 k, v = line.split(":", 1)
                 meta[k.strip()] = v.strip()
-    deps = [d.strip() for d in meta.get("deps", "").strip("[]").split(",") if d.strip()]
+    deps, touches = ([d.strip() for d in meta.get(k, "").strip("[]").split(",") if d.strip()] for k in ("deps", "touches"))
     return dict(id=tid, path=path, title=meta.get("title", tid),
                 status=meta.get("status", "todo"), owner=meta.get("owner", ""),
                 lease_until=meta.get("lease_until", ""), attempts=int(meta.get("attempts") or 1),
                 hold=meta.get("hold", ""), extended=meta.get("extended", ""), parent=meta.get("parent", ""),
                 releases=int(meta.get("releases") or 0), subtasks=meta.get("subtasks", ""),
-                deps=deps, prio=int(meta.get("prio", "2") or 2), body=body)
+                deps=deps, touches=touches, prio=int(meta.get("prio", "2") or 2), body=body)
 
 
 def lease_end(t):
@@ -140,6 +140,65 @@ def assumptions(t):
     return [(e["at"], e["who"], e["text"]) for e in assumption_entries(t) if not e["review"]]
 
 
+def criteria(text):
+    """The acceptance criteria of a task file: [(line index, mark, text)], mark " " = open, "x" = verified,
+    "~" = skipped with a reason (both via `verify`). Empty boxes (the placeholder of `new`) don't count."""
+    out, inside = [], False
+    for i, line in enumerate(text.split("\n")):
+        if line.startswith("## "):
+            inside = line[3:].strip().lower().startswith("acceptance criteria")
+        elif inside:
+            m = re.match(r"- \[([ xX~])\] (.*\S)", line)
+            if m:
+                out.append((i, m[1].lower(), m[2]))
+    return out
+
+
+def overlaps(a, b):
+    """The paths two `touches` lists share: the same path, or one inside the other (the inner one)."""
+    def norm(p):
+        p = p.strip().strip("/")
+        return "" if p == "." else p[2:] if p.startswith("./") else p
+    out = set()
+    for x in map(norm, a):
+        for y in map(norm, b):
+            if x == y or not x or not y or y.startswith(x + "/") or x.startswith(y + "/"):
+                out.add(max(x, y, key=len) or "/")
+    return sorted(out)
+
+
+def crowded(t, ts, who):
+    """[(task, paths)]: tasks someone else is working on now that touch the same files as t."""
+    out = []
+    for o in ts.values():
+        if o["id"] != t["id"] and o["status"] == "in_progress" and not o["stale"] and o["owner"] != who:
+            paths = overlaps(t["touches"], o["touches"])
+            if paths:
+                out.append((o, paths))
+    return out
+
+
+def overlap_warnings(ts):
+    """Unfinished tasks that touch the same files but may run in parallel (neither depends on the other)."""
+    def ancestors(i, seen=None):
+        seen = set() if seen is None else seen
+        for d in ts[i]["deps"]:
+            if d in ts and d not in seen:
+                seen.add(d)
+                ancestors(d, seen)
+        return seen
+    open_ = sorted(i for i, t in ts.items() if t["status"] not in CLOSED and t["touches"])
+    anc = {i: ancestors(i) for i in open_}
+    out = []
+    for n, i in enumerate(open_):
+        for j in open_[n + 1:]:
+            paths = overlaps(ts[i]["touches"], ts[j]["touches"])
+            if paths and i not in anc[j] and j not in anc[i]:
+                out.append(f"{i} and {j} both touch {', '.join(paths)} and may run in parallel: "
+                           "add a dep between them, or split the files")
+    return out
+
+
 def problems(ts):
     out = []
     for t in ts.values():
@@ -184,14 +243,16 @@ def avoided():
 
 
 def offered(ts):
-    """ranked(), with the tasks this agent should leave to others moved to the end."""
-    skip = avoided()
-    return sorted(ranked(ts), key=lambda t: t["id"] in skip)  # stable: keeps the rank otherwise
+    """ranked(), with the tasks this agent should leave to others moved to the end: first those that
+    touch the same files as a task someone is working on (conflicts), last the ones it gave up."""
+    skip, who = avoided(), me()
+    return sorted(ranked(ts), key=lambda t: (t["id"] in skip, bool(crowded(t, ts, who))))  # stable: keeps the rank otherwise
 
 
 # ---------- git ----------
 def git(*a, check=True, env=None):
-    p = subprocess.run(["git", "-C", str(ROOT), *a], capture_output=True, text=True, env=env)
+    p = subprocess.run(["git", "-C", str(ROOT), *a], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", env=env)
     if check and p.returncode:
         sys.exit(f"git {' '.join(a)} failed:\n{p.stderr.strip()}")
     return p
@@ -245,15 +306,37 @@ def check_cmd():
     return lines[0] if lines else None
 
 
-def run_check(cmd):
+def check_limits():
+    """(timeout, slow) in seconds for the check: TASK_CHECK_TIMEOUT (default 900: it must end well within
+    an agent's 30-min session) and TASK_CHECK_SLOW (default 120: above this, `done` warns)."""
+    return (int(os.environ.get("TASK_CHECK_TIMEOUT") or 900), int(os.environ.get("TASK_CHECK_SLOW") or 120))
+
+
+def run_check(cmd, timeout=None):
     """Run .taskcheck in sh on every OS (on Windows: Git for Windows' bash), so one command line works
-    for the whole team."""
+    for the whole team. Output is decoded as UTF-8 and never fails on bytes that aren't (a tool printing
+    in the console's code page must not hide the failure). After `timeout` seconds the check and
+    everything it started is killed; the result then has timed_out set."""
     argv = ["/bin/sh", "-c", cmd]
     if os.name == "nt":
         git_root = Path(git("--exec-path").stdout.strip()).parents[2]  # <Git>/mingw64/libexec/git-core
         bash = [b for b in (git_root / "bin" / "bash.exe", git_root / "usr" / "bin" / "bash.exe") if b.exists()]
         argv = [str(bash[0]), "-c", cmd] if bash else ["cmd", "/c", cmd]
-    return subprocess.run(argv, cwd=ROOT, capture_output=True, text=True)
+    p = subprocess.Popen(argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace", start_new_session=os.name != "nt")
+    timed_out = False
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:  # kill the whole tree: a test server left running would hold the pipes
+        timed_out = True
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+        else:
+            os.killpg(p.pid, 9)
+        out, err = p.communicate()
+    r = subprocess.CompletedProcess(argv, p.returncode, out, err)
+    r.timed_out = timed_out
+    return r
 
 
 def dirty():
@@ -319,7 +402,7 @@ def update(tid, msg, guard, append=None, extra=None, with_code=False, **fields):
     """Compare-and-swap on one task file. Pull, let guard(t) veto (returns an error string) on the
     freshest state, commit the field change, push. The push only succeeds if nobody pushed in between;
     if it is rejected, drop our commit and start over, so the guard always judges the winner's state.
-    `append` is a line added to the end of the file (the Notes section). `extra(t)` may write more files
+    `append` is a line (or append(t) returns it) added to the end of the file (the Notes section). `extra(t)` may write more files
     (returns their paths) that go into the same commit. Only the task files are pushed, never local code
     commits, unless `with_code` (done, after the check). Returns (task, error)."""
     for _ in range(5):
@@ -333,8 +416,9 @@ def update(tid, msg, guard, append=None, extra=None, with_code=False, **fields):
             return t, err
         m = msg(t) if callable(msg) else msg
         set_fields(t, **fields)
-        if append:
-            write(t["path"], t["path"].read_text().rstrip("\n") + f"\n{append}\n")
+        line = append(t) if callable(append) else append
+        if line:
+            write(t["path"], t["path"].read_text().rstrip("\n") + f"\n{line}\n")
         paths = [str(t["path"]), *map(str, extra(t) if extra else [])]
         if not git("status", "--porcelain", "--", *paths).stdout.strip():
             return t, None
@@ -405,7 +489,8 @@ def cmd_new(a):
     p = DIR / f"{a.id}.md"
     if p.exists():
         sys.exit("exists")
-    write(p, f"---\ntitle: {a.title}\nstatus: todo\nowner:\ndeps: [{a.deps}]\nprio: {a.prio}\n---\n"
+    touches = f"touches: [{a.touches}]\n" if a.touches else ""
+    write(p, f"---\ntitle: {a.title}\nstatus: todo\nowner:\ndeps: [{a.deps}]\n{touches}prio: {a.prio}\n---\n"
                  "## Goal\n\n## Acceptance criteria\n- [ ] \n\n## Notes\n")
     print(f"created {p.relative_to(ROOT)}")
 
@@ -426,13 +511,15 @@ def cmd_next(a):
     if frozen():
         return print(f"FROZEN: {frozen()}\nThe board is frozen while humans change the plan: claim nothing new. "
                      "Finish a task you already own; otherwise stop.")
-    r = offered(analyze(load()))
+    ts = analyze(load())
+    r, who = offered(ts), me()
     if not r:
         print("no ready tasks (all claimed, done, or blocked)")
     for t in r[:a.n]:
         stale = f"  (stale: takeover from {t['owner']})" if t["stale"] else ""
         gave_up = "  (you gave it up: leave it to another agent if you can)" if t["id"] in avoided() else ""
-        print(f"{t['id']:24} unblocks {t['dependents']:<3} prio {t['prio']}  {t['title']}{stale}{gave_up}")
+        busy = "".join(f"  (same files as {o['id']}, in progress: {', '.join(p)})" for o, p in crowded(t, ts, who))
+        print(f"{t['id']:24} unblocks {t['dependents']:<3} prio {t['prio']}  {t['title']}{stale}{gave_up}{busy}")
 
 
 def cmd_claim(a):
@@ -472,34 +559,76 @@ def cmd_claim(a):
               f"  git fetch {r} && git merge {r}/{wip_branch(tid)}")
     for b in attempts(tid):
         print(f"\nAbandoned earlier attempt (reference only, do not merge): git diff HEAD...{r or ''}{'/' if r else ''}{b}")
+    for o, paths in crowded(t, analyze(load()), who):
+        print(f"\nHeads-up: {o['id']} ({o['owner']}) is in progress and touches the same files ({', '.join(paths)}). "
+              "Run `git pull --rebase` often, keep your changes there small, and don't redo what it does.")
     print(f"\n{t['path'].read_text()}")
 
 
+def open_criteria(tid):
+    """REFUSED message if tid has acceptance criteria nobody verified (or skipped with a reason), else None."""
+    t = load().get(tid)
+    left = [f"  #{n} {c}" for n, (_, mark, c) in enumerate(criteria(t["path"].read_text()) if t else [], 1)
+            if mark == " "]
+    return None if not left else (
+        f"REFUSED: {tid} has acceptance criteria that nobody verified:\n" + "\n".join(left) +
+        f"\nCheck each one, then: python tasks.py verify {tid} <n> \"<what you ran and its result>\". Only what "
+        "actually ran counts: a test that was found but not run, a build that was not tried, or \"should work\" "
+        f"is no evidence. If one can't be met or verified here: python tasks.py verify {tid} <n> --skip "
+        "\"<why>\" (and `assume` what follows from it), or hold the task if a person is needed.")
+
+
 def cmd_done(a):
-    """Catch up with main, run the project check on the merged result, then mark done and push.
-    If main moved (code, not just task files) while the check ran, check again."""
+    """Catch up with main, check every acceptance criterion was verified, run the project check on the
+    merged result, then mark done and push, with a note of what was checked. If main moved (code, not
+    just task files) while the check ran, check again."""
     no_unfinished_merge()
     if dirty():
         sys.exit("REFUSED: uncommitted changes. Commit your work first (it is pushed with `done`).")
+    sync()
+    err = None if a.force else open_criteria(a.id)
+    if err:
+        sys.exit(err)
     cmd = None if a.skip_check else check_cmd()
     if not cmd and not a.skip_check:
         print("warning: no check configured (.taskcheck or TASK_CHECK); marking done without testing the merge")
+    timeout, slow = check_limits()
     for _ in range(3):
         sync()
         tested = git("rev-parse", "HEAD").stdout.strip()
+        checked = "check skipped (--skip-check)" if a.skip_check else "no check configured"
         if cmd:
             print(f"checking merged result: {cmd}", flush=True)
-            p = run_check(cmd)
+            t0 = time.time()
+            p = run_check(cmd, timeout)
+            secs = round(time.time() - t0)
+            tail = "\n".join((p.stdout + p.stderr).strip().splitlines()[-40:])
+            if p.timed_out:
+                sys.exit(f"{tail}\n\nREFUSED: `{cmd}` did not finish within {timeout}s (TASK_CHECK_TIMEOUT), so "
+                         "nothing was verified. If your change made it hang or slow (a server left running, a "
+                         "test waiting for input), fix that and run done again. Otherwise the check itself is too "
+                         f"slow for every done: python tasks.py hold {a.id} \"the check takes over {timeout}s: "
+                         "make .taskcheck faster\".")
             if p.returncode:
-                tail = "\n".join((p.stdout + p.stderr).strip().splitlines()[-40:])
                 sys.exit(f"{tail}\n\nREFUSED: `{cmd}` fails on your work merged with the latest main "
                          f"(exit {p.returncode}). Fix it (another task may have changed what you depend on), "
                          f"commit, and run done again. If you cannot, see AGENTS.md \"Merge conflicts\" (c)/(d).")
+            if secs > slow:
+                print(f"warning: the check took {secs}s (aim for < {slow}s, TASK_CHECK_SLOW): it runs on every "
+                      "done and every sync; move slow suites (e2e, full builds) out of .taskcheck", flush=True)
+            checked = f"`{cmd}` passed in {secs}s on {tested[:9]}"
 
         def guard(t):
             err = None if a.force else owned_by_me(t)
             return err or ("RETEST" if cmd and code_changed(tested) else None)
-        t, err = update(a.id, f"done: {a.id} by {me()}", guard, with_code=True, status="done", lease_until="")
+
+        def note(t):
+            cs = criteria(t["path"].read_text())
+            skipped = [f"#{n}" for n, (_, mark, _) in enumerate(cs, 1) if mark == "~"]
+            return (f"- done by {me()}: {checked}; criteria verified {sum(m == 'x' for _, m, _ in cs)}/{len(cs)}"
+                    + (f", skipped {' '.join(skipped)}" if skipped else ""))
+        t, err = update(a.id, f"done: {a.id} by {me()}", guard, append=note, with_code=True, status="done",
+                        lease_until="")
         if err != "RETEST":
             break
         print("main changed while checking; checking again")
@@ -759,6 +888,43 @@ def cmd_assume(a):
     print(f"RECORDED assumption on {a.id}")
 
 
+def cmd_verify(a):
+    """Tick acceptance criterion n, with the evidence under it (what ran, and its result); with --skip,
+    mark it as not met or not verifiable here, with why. Without n: list the criteria, numbered."""
+    if a.n is None:
+        t = load().get(a.id) or sys.exit(f"no such task: {a.id}")
+        cs = criteria(t["path"].read_text())
+        for n, (_, mark, text) in enumerate(cs, 1):
+            print(f"#{n} [{mark}] {text}")
+        return print("" if cs else f"{a.id} has no acceptance criteria")
+    if not a.text:
+        sys.exit("say what you ran and its result (or with --skip: why it can't be met or verified here)")
+    when, mark = time.strftime("%Y-%m-%d %H:%M%z"), "~" if a.skip else "x"
+    evidence = " ".join(a.text.split())
+
+    def guard(t):
+        err = None if a.force else owned_by_me(t)
+        if err:
+            return err
+        text = t["path"].read_text()
+        cs = criteria(text)
+        if not 1 <= a.n <= len(cs):
+            return f"{a.id} has {len(cs)} acceptance criteria (list them: python tasks.py verify {a.id})"
+        lines, (i, _, crit) = text.split("\n"), cs[a.n - 1]
+        lines[i] = f"- [{mark}] {crit}"
+        j = i + 1
+        while j < len(lines) and lines[j].startswith("  "):  # after earlier evidence for this criterion
+            j += 1
+        lines.insert(j, f"  - {'skipped' if a.skip else 'verified'} ({when} by {me()}): {evidence}")
+        write(t["path"], "\n".join(lines))
+        return None
+    t, err = update(a.id, f"verify: {a.id} #{a.n} by {me()}", guard)
+    if err:
+        sys.exit(f"REFUSED: {err}")
+    left = sum(m == " " for _, m, _ in criteria(t["path"].read_text()))
+    print(f"{'SKIPPED' if a.skip else 'VERIFIED'} {a.id} #{a.n}" + (f" ({left} still to verify)" if left else ""))
+
+
 def cmd_assumptions(a):
     """Assumptions waiting for a human (with --all: reviewed ones too), newest first."""
     if a.pull:
@@ -843,8 +1009,11 @@ def cmd_heartbeat(a):
 
 
 def cmd_check(a):
-    ps = problems(load())
+    ts = load()
+    ps = problems(ts)
     print("\n".join(ps) or "ok")
+    for w in overlap_warnings(ts) if not ps else []:  # advice, not an error
+        print(f"warning: {w}")
     sys.exit(1 if ps else 0)
 
 
@@ -929,16 +1098,23 @@ def cmd_status(a):
 
 
 def main():
+    for f in (sys.stdout, sys.stderr):  # a console that can't show a character must not hide the output
+        if hasattr(f, "reconfigure"):
+            f.reconfigure(errors="backslashreplace")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("new"); s.add_argument("id"); s.add_argument("title")
-    s.add_argument("--deps", default=""); s.add_argument("--prio", type=int, default=2); s.set_defaults(f=cmd_new)
+    s.add_argument("--deps", default=""); s.add_argument("--prio", type=int, default=2)
+    s.add_argument("--touches", default="", help="files/folders it changes, e.g. frontend/src/app/state,docs/adr: "
+                   "agents then avoid working on two such tasks at once"); s.set_defaults(f=cmd_new)
     s = sp.add_parser("list"); s.add_argument("--status"); s.set_defaults(f=cmd_list)
     s = sp.add_parser("next"); s.add_argument("-n", type=int, default=5); s.set_defaults(f=cmd_next)
     s = sp.add_parser("claim"); s.add_argument("id", nargs="?"); s.add_argument("--who")
     s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_claim)
     for n, f in (("done", cmd_done), ("release", cmd_release)):
-        s = sp.add_parser(n); s.add_argument("id"); s.add_argument("--force", action="store_true"); s.set_defaults(f=f)
+        s = sp.add_parser(n); s.add_argument("id"); s.set_defaults(f=f)
+        s.add_argument("--force", action="store_true", help="someone else's task" +
+                       (", or acceptance criteria nobody verified" if n == "done" else ""))
         if n == "done":
             s.add_argument("--skip-check", action="store_true", help="don't run the project check")
         if n == "release":
@@ -963,6 +1139,10 @@ def main():
     sp.add_parser("unfreeze").set_defaults(f=cmd_unfreeze)
     s = sp.add_parser("assume", help="record an assumption taken without a human, for later review")
     s.add_argument("id"); s.add_argument("text"); s.set_defaults(f=cmd_assume)
+    s = sp.add_parser("verify", help="tick an acceptance criterion with its evidence (no n: list them)")
+    s.add_argument("id"); s.add_argument("n", nargs="?", type=int); s.add_argument("text", nargs="?")
+    s.add_argument("--skip", action="store_true", help="can't be met or verified here: text says why")
+    s.add_argument("--force", action="store_true", help="someone else's task"); s.set_defaults(f=cmd_verify)
     s = sp.add_parser("assumptions", help="list assumptions waiting for a human, newest first")
     s.add_argument("--pull", action="store_true")
     s.add_argument("--all", action="store_true", help="also confirmed and rejected ones"); s.set_defaults(f=cmd_assumptions)
