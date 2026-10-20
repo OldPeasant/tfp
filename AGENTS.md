@@ -49,26 +49,56 @@ human can trust a done task without redoing it:
 
 For implementation tasks, the parent TFP worker owns the task from claim through completion.
 
+If the project has `docs/QUALITY.md` (the gate is opt-in, SETUP.md A.8), `done` refuses a task without
+committed, complete and current review evidence. `--force` and `--skip-check` don't bypass this. The
+contract (files, `quality.json` schema, freshness rules) is in `docs/QUALITY.md`. Only tasks classified
+`quality: exempt` while the board was planned skip it. Without `docs/QUALITY.md`, follow the same
+workflow; `done` just doesn't check the reports (steps 9 and the gate part of 10 then don't apply).
+
 Before running `tasks.py done`, the parent worker must complete this quality workflow:
 
-1. Finish the implementation for the claimed task.
-2. Invoke the `test-writer` sub-agent to:
-    - inspect the task acceptance criteria and changed behavior;
-    - add or improve relevant tests;
-    - run focused tests and broader validation where practical;
-    - report any production bugs it finds.
-3. Invoke the `code-reviewer` sub-agent to:
-    - review the implementation against the current task acceptance criteria;
-    - check applicable project architecture, integration, security, tests, and maintainability;
-    - report only validated, evidence-based findings.
-4. If the test-writer or code-reviewer reports valid issues, invoke the `fixer` sub-agent to resolve them.
+1. Finish the implementation for the claimed task and commit it. Note the task's base commit
+   (`git merge-base HEAD origin/main`) and its commits; pass both to every helper.
+2. **Always** invoke the `test-writer` sub-agent (Agent/Task tool, `subagent_type: test-writer`), for
+   every implementation task. It:
+    - inspects the task acceptance criteria and changed behavior;
+    - adds or improves relevant tests;
+    - runs focused tests and broader validation where practical, plus task-scoped coverage
+      where the project measures it;
+    - reports any production bugs it finds;
+    - writes `reviews/<task-id>/tests.md`, also when no tests were needed.
+3. **Always** invoke the `code-reviewer` sub-agent (`subagent_type: code-reviewer`). It:
+    - reviews the implementation against the current task acceptance criteria;
+    - checks applicable project architecture, integration, security, tests, and maintainability;
+    - reports only validated, evidence-based findings;
+    - writes `reviews/<task-id>/review.md`, also when there are no findings.
+4. If the test-writer or code-reviewer reports valid issues that need changes, invoke the `fixer`
+   sub-agent (`subagent_type: fixer`) to resolve them. It writes `reviews/<task-id>/fixes.md`. If no
+   fix is needed, record "fixer not required" with the reason in `quality.json`.
 5. Re-run relevant tests after fixes.
-6. If material fixes were made, re-run `code-reviewer` when useful to confirm the issues are resolved.
+6. If the code changed after the review (fixes included), run `test-writer` and `code-reviewer` again
+   on the final code. Evidence for an earlier revision is stale, and `done` rejects it. Only changed code
+   lines count (`done` compares `git patch-id`, `docs/QUALITY.md` "Freshness"): rebasing, merging main,
+   squashing, or commits touching only `tasks/`/`reviews/` keep the evidence fresh, even though the
+   commit hash changes. Don't re-run the helpers for that; set `reviewed_revision` to the new hash.
 7. Record the evidence for each acceptance criterion with `tasks.py verify` (see "Evidence"), using
    what you and the helpers actually ran.
 8. Run `.taskcheck`.
-9. Only when required behavior is implemented, important findings are resolved, every criterion is
-   verified (or skipped with a reason) and `.taskcheck` passes may the parent worker run `tasks.py done`.
+9. Write `reviews/<task-id>/quality.json` (`docs/QUALITY.md`): task id, `reviewed_revision` (full
+   hash of the final reviewed code), helper results and report paths, `fixes_required`, every
+   finding with its disposition, and the final validation commands and results. Commit it together
+   with the reports. You verify and commit the helpers' reports. **Never write, fabricate or edit a
+   helper's report yourself**, not even to satisfy the gate.
+10. Only when required behavior is implemented, important findings are resolved, every criterion is
+   verified (or skipped with a reason), the evidence is committed and `.taskcheck` passes may the
+   parent worker run `tasks.py done`.
+
+If a required helper invocation fails (tool error, the helper stops without a report), resolve it:
+retry with a clearer prompt or a narrower scope. If it keeps failing,
+`python tasks.py hold <id> "<helper> could not run: <error>"`. Never skip a helper silently and never
+mark the task done without its report. `tests.md` must keep the task-scoped coverage numbers and
+significant gaps (or the concrete reason coverage could not be measured), even though raw coverage
+output is Git-ignored.
 
 ### Quality sub-agent boundaries
 

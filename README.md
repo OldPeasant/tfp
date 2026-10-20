@@ -12,8 +12,10 @@ Needs only Python 3 and git.
 | `agents.py` | launch/monitor N Claude agents, each in its own clone, looping over the board |
 | `AGENTS.md` | protocol the agents read (copy into the project) |
 | `templates/fullstack/tasks/` | 22-task starter set for a typical full-stack + AI app |
+| `templates/claude-agents/` | test-writer, code-reviewer and fixer sub-agents (copy into `.claude/agents/`) |
+| `templates/quality/QUALITY.md` | opt-in review-evidence gate for `done`: copy to `docs/QUALITY.md` to switch it on (SETUP.md A.8) |
 | `tests/test_publish.sh` | scenario tests: status changes never push unfinished code to main (`bash tests/test_publish.sh`) |
-| `tests/test_*.py` | tests for evidence, check limits, `touches`, assumptions, over-budget tasks (`python3 tests/test_done_gate.py`, ...) |
+| `tests/test_*.py` | tests for evidence, check limits, `touches`, assumptions, over-budget tasks, the review gate (`python3 tests/test_done_gate.py`, ...) |
 
 ## Contest quick start
 The setup below is for work that spans several existing repos (e.g. frontend + backend on GitLab, maybe

@@ -55,6 +55,7 @@ def parse_text(text, tid, path=None):
                 lease_until=meta.get("lease_until", ""), attempts=int(meta.get("attempts") or 1),
                 hold=meta.get("hold", ""), extended=meta.get("extended", ""), parent=meta.get("parent", ""),
                 releases=int(meta.get("releases") or 0), subtasks=meta.get("subtasks", ""),
+                quality=meta.get("quality", ""), quality_reason=meta.get("quality_reason", ""),
                 deps=deps, touches=touches, prio=int(meta.get("prio", "2") or 2), body=body)
 
 
@@ -220,6 +221,10 @@ def problems(ts):
             out.append(f"{t['id']}: bad status '{t['status']}'")
         if t["status"] == "in_progress" and not t["owner"]:
             out.append(f"{t['id']}: in_progress without owner")
+        if t["quality"] not in ("", "required", "exempt"):
+            out.append(f"{t['id']}: bad quality '{t['quality']}' (want required or exempt)")
+        if t["quality"] == "exempt" and not t["quality_reason"]:
+            out.append(f"{t['id']}: quality: exempt needs a quality_reason (why there is no code to review)")
         if t["lease_until"] and lease_end(t) is None:
             out.append(f"{t['id']}: bad lease_until '{t['lease_until']}' (want {LEASE_FMT})")
         for d in t["deps"]:
@@ -516,7 +521,10 @@ def cmd_new(a):
     if p.exists():
         sys.exit("exists")
     touches = f"touches: [{a.touches}]\n" if a.touches else ""
-    write(p, f"---\ntitle: {a.title}\nstatus: todo\nowner:\ndeps: [{a.deps}]\n{touches}prio: {a.prio}\n---\n"
+    if a.quality_exempt is not None and not a.quality_exempt.strip():
+        sys.exit("--quality-exempt needs a reason (why this task produces no code to test and review)")
+    exempt = f"quality: exempt\nquality_reason: {a.quality_exempt.strip()}\n" if a.quality_exempt else ""
+    write(p, f"---\ntitle: {a.title}\nstatus: todo\nowner:\ndeps: [{a.deps}]\n{touches}{exempt}prio: {a.prio}\n---\n"
                  "## Goal\n\n## Acceptance criteria\n- [ ] \n\n## Notes\n")
     print(f"created {p.relative_to(ROOT)}")
 
@@ -607,10 +615,179 @@ def open_criteria(tid):
         "\"<why>\" (and `assume` what follows from it), or hold the task if a person is needed.")
 
 
+# ---------- quality gate ----------
+# Opt-in: a project switches it on by committing docs/QUALITY.md (template: templates/quality/QUALITY.md).
+# Then every task must have committed review evidence before `done` accepts it (docs/QUALITY.md):
+# reviews/<id>/tests.md (test-writer), review.md (code-reviewer), fixes.md (fixer, when fixes were
+# required) and quality.json (the parent's record). Only a task classified `quality: exempt` with a
+# `quality_reason:` when it was claimed skips it. --force and --skip-check never do.
+QUALITY_SCHEMA = 1
+QUALITY_DOC = "docs/QUALITY.md"
+REPORT = {"test-writer": "tests.md", "code-reviewer": "review.md", "fixer": "fixes.md"}
+REPORT_SECTION = {"tests.md": "## Coverage", "review.md": "## Review conclusion", "fixes.md": "## Final status"}
+PLACEHOLDER = re.compile(r"<(?:YYYY-MM-DD|task-id[^>]*|resolved Git scope|sources used|hash[^>]*|count|"
+                         r"command[^>]*|path|number|Pass / Fail[^>]*|bug title|finding-id|title|"
+                         r"current task or supplied scope|P[0-3] count)>|\bTODO\b|\bTBD\b|lorem ipsum", re.I)
+MIN_REPORT_CHARS = 200  # non-whitespace characters: a heading and "ok" is not a report
+RESOLVED = {"fixed", "invalid", "out_of_scope", "deferred", "accepted"}  # "open" = unresolved
+FIXED_ONLY = {"P0", "P1"}  # blocking severities: must be fixed or shown invalid
+QUALITY_EXCLUDE = (":(exclude)tasks", ":(exclude)reviews")  # bookkeeping, not code: may change after review
+
+
+def committed(path, ref="HEAD"):
+    """Content of `path` in commit `ref`, or None."""
+    p = git("show", f"{ref}:{path}", check=False)
+    return p.stdout if p.returncode == 0 else None
+
+
+def task_patch_id(head, base):
+    """Stable patch-id of the task's code change base..head (tasks/ and reviews/ excluded), "" if none.
+    It survives rebases and merges of main, and changes when the task's own code changes."""
+    diff = git("diff", "-U0", "--no-color", "--no-ext-diff", base, head, "--", ".", *QUALITY_EXCLUDE).stdout
+    if not diff.strip():
+        return ""
+    p = subprocess.run(["git", "-C", str(ROOT), "patch-id", "--stable"], input=diff, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
+    return p.stdout.split()[0] if p.stdout.split() else ""
+
+
+def claimed_version(tid):
+    """The task file as it was when it was last claimed (the claim commit on main), or None."""
+    ref = upstream() or "HEAD"
+    sha = git("log", ref, "-n1", "--format=%H", "--fixed-strings", f"--grep=claim: {tid} by", check=False).stdout.strip()
+    text = committed(f"tasks/{tid}.md", sha) if sha else None
+    return parse_text(text, tid) if text else None
+
+
+def quality_exemption(t):
+    """(exempt, error): an exemption counts only if it was classified at planning, i.e. was already in the
+    task file when it was claimed; a worker adding it to its own task does not count."""
+    if t["quality"] != "exempt":
+        return False, None
+    c = claimed_version(t["id"])
+    if not c or c["quality"] != "exempt" or not c["quality_reason"]:
+        return False, (f"{t['id']} says `quality: exempt`, but it was not classified so (with a quality_reason) "
+                       "when it was claimed. Exemptions are decided while planning the board, not by the worker.")
+    return True, None
+
+
+def quality_errors(tid, ref="HEAD"):
+    """Everything missing or stale in the committed review evidence of task `tid` at `ref`."""
+    d, errs = f"reviews/{tid}", []
+    raw = committed(f"{d}/quality.json", ref)
+    if raw is None:
+        return [f"{d}/quality.json is missing" + (" (it exists but is not committed)"
+                                                  if (ROOT / d / "quality.json").exists() else "")]
+    try:
+        q = __import__("json").loads(raw)
+    except ValueError as e:
+        return [f"{d}/quality.json is not valid JSON: {e}"]
+    if not isinstance(q, dict):
+        return [f"{d}/quality.json must be a JSON object"]
+    if q.get("schema") != QUALITY_SCHEMA:
+        errs.append(f"quality.json: schema must be {QUALITY_SCHEMA}")
+    if q.get("task") != tid:
+        errs.append(f"quality.json: task is {q.get('task')!r}, not {tid!r} (evidence of another task?)")
+    helpers = q.get("helpers") if isinstance(q.get("helpers"), dict) else {}
+    fixes = q.get("fixes_required")
+    if not isinstance(fixes, bool):
+        errs.append("quality.json: fixes_required must be true or false")
+    needed = ["test-writer", "code-reviewer"] + (["fixer"] if fixes else [])
+    for h in needed:
+        e = helpers.get(h) if isinstance(helpers.get(h), dict) else {}
+        if e.get("status") != "completed":
+            errs.append(f"quality.json: helpers.{h}.status is {e.get('status')!r}, must be \"completed\" "
+                        f"(invoke the {h} sub-agent)")
+        path = f"{d}/{REPORT[h]}"
+        if e.get("report") != path:
+            errs.append(f"quality.json: helpers.{h}.report must be {path!r}")
+        text = committed(path, ref)
+        if text is None:
+            errs.append(f"{path} is missing" + (" (it exists but is not committed)" if (ROOT / path).exists() else ""))
+            continue
+        if len(re.sub(r"\s", "", text)) < MIN_REPORT_CHARS:
+            errs.append(f"{path} is empty or too short to be a report")
+        ph = PLACEHOLDER.search(text)
+        if ph:
+            errs.append(f"{path} still contains the placeholder {ph[0]!r}")
+        if not re.search(rf"^Task:\s*[`*]*{re.escape(tid)}(?![\w-])", text, re.M):
+            errs.append(f"{path} does not name the task {tid!r} (a 'Task: {tid} ...' line)")
+        if REPORT_SECTION[REPORT[h]] not in text:
+            errs.append(f"{path} has no '{REPORT_SECTION[REPORT[h]]}' section")
+    if fixes is False:
+        e = helpers.get("fixer") if isinstance(helpers.get("fixer"), dict) else {}
+        if e.get("status") != "not_required" or not str(e.get("reason", "")).strip():
+            errs.append('quality.json: without fixes, helpers.fixer must be {"status": "not_required", '
+                        '"reason": "<why>"}')
+    findings = q.get("findings")
+    if not isinstance(findings, list):
+        errs.append("quality.json: findings must be a list (empty when there were none)")
+        findings = []
+    for f in findings:
+        f = f if isinstance(f, dict) else {}
+        fid, disp, sev = f.get("id", "?"), f.get("disposition"), str(f.get("severity", "")).upper()
+        if disp not in RESOLVED:
+            errs.append(f"finding {fid}: disposition {disp!r} is unresolved (want one of {', '.join(sorted(RESOLVED))})")
+        elif sev in FIXED_ONLY and disp not in ("fixed", "invalid"):
+            errs.append(f"finding {fid}: {sev} is blocking, so it must be fixed or shown invalid, not {disp!r}")
+        elif disp != "fixed" and not str(f.get("note", "")).strip():
+            errs.append(f"finding {fid}: a {disp!r} finding needs a note saying why")
+        if disp == "fixed" and fixes is False:
+            errs.append(f"finding {fid} is fixed, so fixes_required must be true (with a fixer report)")
+    val = q.get("validation")
+    if not isinstance(val, list) or not val:
+        errs.append("quality.json: validation must list the final commands run and their results")
+    else:
+        for v in val:
+            v = v if isinstance(v, dict) else {}
+            if not str(v.get("command", "")).strip() or v.get("result") != "pass":
+                errs.append(f"validation {v.get('command')!r}: result is {v.get('result')!r}, must be \"pass\"")
+    rev = str(q.get("reviewed_revision", ""))
+    if not re.fullmatch(r"[0-9a-f]{40}", rev):
+        errs.append("quality.json: reviewed_revision must be the full commit hash the helpers reviewed")
+    elif git("cat-file", "-e", f"{rev}^{{commit}}", check=False).returncode:
+        errs.append(f"reviewed_revision {rev[:9]} is not a known commit: review the current code again")
+    else:
+        main = upstream() or ref
+        then = git("merge-base", rev, main, check=False).stdout.strip()
+        now = git("merge-base", ref, main, check=False).stdout.strip()
+        if not then or not now or task_patch_id(rev, then) != task_patch_id(ref, now):
+            errs.append(f"the task's code changed after the review of {rev[:9]} (only reviews/ and tasks/ may "
+                        "change afterwards): run test-writer and code-reviewer on the current code, then update "
+                        "the reports and reviewed_revision")
+    return errs
+
+
+def quality_enabled():
+    """The gate is on when docs/QUALITY.md is committed, on HEAD or on main: deleting it in a task's
+    own commits does not switch it off."""
+    return any(committed(QUALITY_DOC, r) is not None for r in ("HEAD", upstream()) if r)
+
+
+def quality_gate(tid):
+    """REFUSED message if the task's committed review evidence is missing, incomplete or stale, else None."""
+    t = load().get(tid)
+    if not t or not quality_enabled():
+        return None
+    exempt, err = quality_exemption(t)
+    if err:
+        return f"REFUSED: {err}"
+    if exempt:
+        print(f"quality gate: {tid} is exempt ({t['quality_reason']})", flush=True)
+        return None
+    errs = quality_errors(tid)
+    return None if not errs else (
+        f"REFUSED: {tid} has no complete, current review evidence:\n" + "\n".join(f"  - {e}" for e in errs) +
+        f"\nRun the quality workflow (AGENTS.md \"Quality gate\"): the test-writer writes reviews/{tid}/tests.md, "
+        f"the code-reviewer reviews/{tid}/review.md, the fixer reviews/{tid}/fixes.md when fixes are needed; "
+        f"you record reviews/{tid}/quality.json (docs/QUALITY.md) and commit them with the code. "
+        "--force and --skip-check do not bypass this.")
+
+
 def cmd_done(a):
-    """Catch up with main, check every acceptance criterion was verified, run the project check on the
-    merged result, then mark done and push, with a note of what was checked. If main moved (code, not
-    just task files) while the check ran, check again."""
+    """Catch up with main, check every acceptance criterion was verified and the review evidence is
+    complete and current, run the project check on the merged result, then mark done and push, with a
+    note of what was checked. If main moved (code, not just task files) while the check ran, check again."""
     no_unfinished_merge()
     if dirty():
         sys.exit("REFUSED: uncommitted changes. Commit your work first (it is pushed with `done`).")
@@ -625,6 +802,9 @@ def cmd_done(a):
     for _ in range(3):
         sync()
         tested = git("rev-parse", "HEAD").stdout.strip()
+        err = quality_gate(a.id)  # on the merged result, every round: no option skips it
+        if err:
+            sys.exit(err)
         checked = "check skipped (--skip-check)" if a.skip_check else "no check configured"
         if cmd:
             print(f"checking merged result: {cmd}", flush=True)
@@ -1135,7 +1315,10 @@ def main():
     s = sp.add_parser("new"); s.add_argument("id"); s.add_argument("title")
     s.add_argument("--deps", default=""); s.add_argument("--prio", type=int, default=2)
     s.add_argument("--touches", default="", help="files/folders it changes, e.g. frontend/src/app/state,docs/adr: "
-                   "agents then avoid working on two such tasks at once"); s.set_defaults(f=cmd_new)
+                   "agents then avoid working on two such tasks at once")
+    s.add_argument("--quality-exempt", metavar="REASON", help="classify a non-implementation task (no code to "
+                   "test or review) as exempt from the review-evidence gate, with the reason; decided while planning")
+    s.set_defaults(f=cmd_new)
     s = sp.add_parser("list"); s.add_argument("--status"); s.set_defaults(f=cmd_list)
     s = sp.add_parser("next"); s.add_argument("-n", type=int, default=5); s.set_defaults(f=cmd_next)
     s = sp.add_parser("claim"); s.add_argument("id", nargs="?"); s.add_argument("--who")

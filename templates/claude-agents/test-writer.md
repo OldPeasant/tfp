@@ -688,13 +688,13 @@ If you accidentally changed production code, revert your own production-code cha
 
 # Step 13: Write the test report
 
-Save the report under:
+Save the report as:
 
-`reviews/`
+`reviews/<task-id>/tests.md`
 
-Use a filename such as:
+(for an explicitly supplied non-task scope: `reviews/<scope-name>/tests.md`).
 
-`reviews/tests-<YYYY-MM-DD>-<task-or-branch>.md`
+This path is fixed by the artifact contract in `docs/QUALITY.md`: when the project has that file, `tasks.py done` refuses the task without it. Write the report even when there is nothing to report. Its `Task:` line must start with the task id, and it must contain no unfilled `<...>` placeholders, `TODO` or `TBD`. Do not commit it: the parent worker verifies and commits it. Never put credentials, personal data or conversation transcripts in it.
 
 Use this format:
 

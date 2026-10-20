@@ -61,48 +61,24 @@ takes a few hours, most of it in phases C and D. Don't start phase D before I ap
    File existence alone does not prove that headless workers can invoke these helpers.
 7. Ensure the official `frontend-design` plugin is available in Claude Code. Install or enable Anthropic's official Frontend Design plugin for the Claude account used by the autonomous workers. 
    Verify that the plugin is available in Claude Code before starting the dry run. Frontend Design is used only for tasks involving user-facing frontend or UI implementation. It must not be treated as a requirement for backend-only, infrastructure, documentation, or other non-visual tasks. If the plugin is unavailable, report it during setup rather than blocking TFP itself.
-8. Install and verify a mandatory review-artifact completion gate in the generated working repo.
-   This is a setup deliverable, not a reminder for workers. If the copied TFP version does
-   not provide this gate, implement it and its tests before starting autonomous workers.
-   Do not describe the gate as installed merely because AGENTS.md mentions reviews.
+8. Decide whether to switch on the review-evidence gate. It is built into `tasks.py done` and opt-in:
+   with it, `done` refuses a task until the helpers' reports and a `quality.json` record are committed
+   and still match the final code. It catches real bugs, but costs time: count on about one extra
+   agent session per implementation task. Without it, AGENTS.md still asks for the helpers, but
+   nothing checks that they ran. To switch it on, commit the contract into the working repo:
 
-   Use a consistent artifact contract in AGENTS.md and all three helper definitions:
-   - Every implementation task writes reviews/<task-id>/tests.md and reviews/<task-id>/review.md,
-     including when there are no findings or no additional tests are needed.
-   - If validated findings require fixes, the fixer writes reviews/<task-id>/fixes.md. Otherwise
-     the parent records "fixer not required" with the reason in the task's quality record.
-   - Each helper writes its own report. The parent verifies and commits the reports with the work;
-     it must not fabricate reports to satisfy the gate.
-   - Reports identify the task, scope of code examined, commands and results, and findings with
-     their disposition. The test report includes task-scoped coverage and material gaps, or the
-     specific reason measurement was unavailable. Raw HTML/JSON coverage can remain Git-ignored.
-   - Commit a machine-readable reviews/<task-id>/quality.json record, with a documented schema:
-     task id, reviewed code revision, helper completion results, report paths, whether fixes were
-     required, finding dispositions, and final validation results. Never store credentials or
-     private conversation transcripts in these artifacts.
+   ```sh
+   mkdir -p docs && cp tfp/templates/quality/QUALITY.md docs/QUALITY.md
+   ```
 
-   Integrate validation into tasks.py done for the specific task being completed:
-   - Check committed artifacts, not just files in the working directory. Require nonempty reports
-     and valid metadata matching that task; reject placeholders and missing required fields.
-   - Require successful test-writer and code-reviewer completion, and a fixer report when fixes
-     were required. Reject unresolved blocking findings or failed required validation.
-   - Check freshness against the final task code after merging main. Allow report-only and task
-     bookkeeping commits after review; relevant code changes require renewed review/validation.
-     Define the compared scope explicitly so concurrent task-state commits do not invalidate it.
-   - On failure, leave the task unfinished and do not publish it as done; print the exact missing
-     or stale evidence and how to resolve it. Keep existing lease, merge, and project-check guards.
-   - Normal worker completion, including skip-check or force options, must not bypass this gate.
-     Scope it to the task being completed, not all other workers' unfinished tasks.
-   - Default tasks to requiring these artifacts. Any non-implementation exemption must be
-     explicitly classified and justified during task planning, not silently inferred by a worker.
-
-   Add automated tests in an isolated temporary Git repository with no real remote writes:
-   missing/empty reports, uncommitted reports, wrong-task metadata, stale evidence, missing fixer
-   evidence when required, unresolved findings, attempted bypass, and a valid complete report set.
-   Verify both a failed completion leaving task state unchanged and a successful completion.
-   Document that this gate enforces recorded evidence: file presence alone cannot prove the
-   quality or authenticity of an independent review. The dry run must also inspect actual helper
-   invocations.
+   `docs/QUALITY.md` defines the reports in `reviews/<task-id>/`, the `quality.json` schema, the
+   freshness rule (rebases are fine, changed code needs a new review) and exemptions. The gate is
+   on while the file is on main; a task deleting it in its own commits doesn't switch it off. Tasks
+   without code (docs, human tasks, deployments) are exempted in phase D with
+   `python tasks.py new <id> "<title>" --quality-exempt "<reason>"`; workers can't exempt their own
+   task. Run the gate's tests in the TFP clone: `python3 tfp/tests/test_quality_gate.py`. The gate
+   enforces *recorded* evidence; it can't prove a review was genuine, so the dry run (E.3) inspects
+   the actual helper invocations.
 
 ## B. Understand the code (30–60 min)
 1. Read `backend/` and `frontend/`. Write `docs/ARCHITECTURE.md`: stack, an "Install" section for
@@ -169,6 +145,7 @@ Goal / Acceptance criteria into each file). Rules for good tasks:
   usually one task, or a chain.
 - `deps` only where really needed. The board must be wide enough to keep all agents busy
   (count: agents on all laptops).
+- With the review-evidence gate on (A.8): give every task without code `--quality-exempt "<reason>"`.
 - `prio: 1` for the demo-critical path. End with demo polish, README and a final smoke test.
 
 Then `python tasks.py check` and `python tasks.py graph`, and walk me through board.html: the critical
@@ -188,9 +165,9 @@ path, how many tasks can run in parallel, and anything unclear. Revise until I a
    - inspect the test report for measured coverage and significant gaps, or a concrete explanation
      of why coverage could not be measured;
    - confirm the project check passed;
-   - confirm the completion-gate tests passed, including rejection of missing review artifacts.
-   Do not proceed to phase F unless the artifact gate and the end-to-end helper workflow both
-   pass. A missing report is a failed dry run even if lint, tests, and task completion succeeded.
+   - with the gate on (A.8): confirm `quality.json` is committed, `python3 tfp/tests/test_quality_gate.py`
+     passed, and `done` refused the task while a report was missing.
+   Do not proceed to phase F unless the end-to-end helper workflow (and the gate, if on) passes. A missing report is a failed dry run even if lint, tests, and task completion succeeded.
    Save a copy of agent-1.session.txt immediately after the implementation session, before another
    session starts: the runner overwrites that file. Inspect tool errors and permission_denials as
    well as permission_denied text. A completed task or absent denial text alone is insufficient.
