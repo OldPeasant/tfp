@@ -1,4 +1,4 @@
-import { Component, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ACTIONS, Field } from './actions';
@@ -136,7 +136,9 @@ export class ActionDialog {
       const r = this.ui.dialog();
       const el = this.dlg().nativeElement;
       if (r) {
-        this.params.set({ ...(r.key === 'agents_start' ? { n: 2, host: this.store.local()?.host, first: this.nextAgent() } : {}), ...(r.preset ?? {}) });
+        // untracked: a poll replaces store.local(); it must not reset what the user typed since opening
+        const defaults = untracked(() => (r.key === 'agents_start' ? { n: 2, host: this.store.local()?.host, first: this.nextAgent() } : {}));
+        this.params.set({ ...defaults, ...(r.preset ?? {}) });
         this.job.set(null);
         this.error.set(null);
         if (!el.open) el.showModal();
