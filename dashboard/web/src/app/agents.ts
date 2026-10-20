@@ -10,7 +10,7 @@ const STATE_HELP: Record<string, string> = {
   limited: 'usage limit: resumes by itself',
   paused: 'sessions keep failing: check its log',
   backoff: 'retrying after an error',
-  blocked: 'nothing can ever become ready',
+  blocked: 'nothing can become ready, or its pushes fail: a human must look (see its log)',
   finished: 'all tasks done',
   stopped: 'stopped',
   offline: 'no news: laptop asleep or gone?',

@@ -10,7 +10,7 @@ Leases: with TASK_LEASE=<seconds> set (agents.py does this), a claim records
 lease has expired is "stale" and can be claimed again (a takeover), so a crashed
 machine cannot block the board. Claims without TASK_LEASE (humans) never expire.
 """
-import argparse, calendar, os, re, subprocess, sys, time
+import argparse, calendar, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 if __name__ == "__main__" and os.name == "nt" and not sys.flags.utf8_mode:  # Windows: UTF-8 for files,
@@ -289,6 +289,32 @@ def git(*a, check=True, env=None):
     return p
 
 
+PUSH_FAILURE = "tfp-push-failed"  # in the git dir: the push the remote refused last, read by agents.py
+CMD, push_error = [""], [""]  # the tasks.py command running, git's error of the last failed push
+REASON = [""]  # the reason of a `hold` running: the runner retries the hold with it once pushes work
+
+
+def pushed(*a):
+    """git push; returns True if it worked, else remembers git's error (on one line) for push_failed()."""
+    p = git("push", *a, check=False)
+    if p.returncode:
+        push_error[0] = " | ".join(l.strip() for l in p.stderr.splitlines() if l.strip()) or f"exit {p.returncode}"
+    return p.returncode == 0
+
+
+def push_failed(tid, hint):
+    """Exit with `PUSH FAILED: <git error>` and a hint, no traceback. Also leaves the failure in the git
+    dir for the runner (agents.py), so it stops starting sessions on a task whose pushes keep failing."""
+    err = push_error[0] or "unknown error"
+    try:
+        f = ROOT / git("rev-parse", "--git-path", PUSH_FAILURE).stdout.strip()
+        f.write_text(json.dumps(dict(task=tid, cmd=CMD[0], error=err, at=int(time.time()),
+                                     **({"reason": REASON[0]} if REASON[0] else {}))))
+    except OSError:
+        pass
+    sys.exit(f"PUSH FAILED: {err}\n{hint}")
+
+
 def upstream():
     p = git("rev-parse", "--abbrev-ref", "@{u}", check=False)
     return p.stdout.strip() if p.returncode == 0 else None
@@ -412,14 +438,14 @@ def publish(paths, msg):
     finally:
         index.unlink(missing_ok=True)
     new = git("commit-tree", tree, "-p", base, "-m", msg).stdout.strip()
-    pushed = git("push", "-q", r, f"{new}:refs/heads/{branch}", check=False).returncode == 0
+    ok = pushed("-q", r, f"{new}:refs/heads/{branch}")
     tracked = set(git("ls-tree", "-r", "--name-only", "HEAD", "--", *rels).stdout.split())
     if tracked:
         git("checkout", "HEAD", "--", *sorted(tracked))
     for rel in rels:
         if rel not in tracked:
             (ROOT / rel).unlink(missing_ok=True)
-    if not pushed:
+    if not ok:
         return False
     git("update-ref", f"refs/remotes/{up}", new)
     if git("rebase", "-q", "--autostash", "--onto", new, base, check=False).returncode:
@@ -459,10 +485,12 @@ def update(tid, msg, guard, append=None, extra=None, with_code=False, **fields):
             continue  # lost the push race: re-read, re-judge
         git("add", *paths)
         git("commit", "-m", m, "--", *paths)
-        if not upstream() or git("push", check=False).returncode == 0:
+        if not upstream() or pushed():
             return t, None
         git("reset", "--keep", "HEAD~1")  # lost the push race: forget our commit, re-read, re-judge
-    sys.exit("could not push after 5 attempts (network/auth problem?)")
+    push_failed(tid, f"Could not record '{m}' on the board after 5 attempts: the remote "
+                "refuses the push (auth, permissions, a hook?), so retrying won't help. Nothing changed on the board. "
+                f"Only a human can fix it: stop working on {tid} and end the session.")
 
 
 def owned_by_me(t):
@@ -909,7 +937,11 @@ def save_work(tid):
                  "push or move them first, or they would land on main with the release.")
     if dirty():
         sys.exit(f"REFUSED: commit your changes first; they will be saved to {wip_branch(tid)}, not main.")
-    git("push", "-q", "-f", remote(), f"HEAD:refs/heads/{wip_branch(tid)}")
+    if not pushed("-q", "-f", remote(), f"HEAD:refs/heads/{wip_branch(tid)}"):
+        push_failed(tid, f"Could not save your {ahead} commit(s) to {remote()}/{wip_branch(tid)}: the remote refuses "
+                    f"them, so retrying won't help. {tid} is unchanged on the board (still yours) and your commits are "
+                    "still here, unpushed. Only a human can fix it (e.g. a token without `workflow` scope cannot push "
+                    f".github/workflows/*). Stop working on {tid} and end the session; the runner waits for the fix.")
     git("reset", "-q", "--keep", "@{u}")
     print(f"saved {ahead} unfinished commit(s) to {remote()}/{wip_branch(tid)} (not main)")
     return ts
@@ -1376,6 +1408,7 @@ def main():
     s = sp.add_parser("watch"); s.add_argument("-n", "--interval", type=int, default=20)
     s.add_argument("--once", action="store_true", help="write board.html once and exit"); s.set_defaults(f=cmd_watch)
     a = p.parse_args()
+    CMD[0], REASON[0] = a.cmd, (a.reason if a.cmd == "hold" else "")
     a.f(a)
 
 

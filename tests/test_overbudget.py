@@ -137,6 +137,7 @@ class Runner(Board):
     """Runs `agents.py run` for one agent with the fake agent above, waits for an expected board state."""
     mode = ""
     budget, avoid = 1, 300
+    fake_agent, extra_args = FAKE_AGENT, ()
 
     def setUp(self):
         super().setUp()
@@ -146,18 +147,22 @@ class Runner(Board):
         sh(self.tmp, "git", "clone", "-q", "remote.git", str(self.clone))
         self.config(self.clone, OWNER)
         fake = self.tmp / "fake_agent.py"
-        fake.write_text(textwrap.dedent(FAKE_AGENT))
+        fake.write_text(textwrap.dedent(self.fake_agent))
         env = {k: v for k, v in os.environ.items() if not k.startswith("TASK")}
         env.update(FAKE_MODE=self.mode, AGENT_HOST="box")
         cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(fake))}"
+        self.before_start()
         out = open(self.log, "w")
         self.addCleanup(out.close)
         self.proc = subprocess.Popen(
             [sys.executable, str(SRC / "agents.py"), "run", "agent-1", str(self.clone), "--owner", OWNER,
              "--cmd", cmd, "--lease", "120", "--limit-wait", "60", "--task-budget", str(self.budget),
-             "--avoid", str(self.avoid)],
+             "--avoid", str(self.avoid), *self.extra_args],
             stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
         self.addCleanup(self.kill)
+
+    def before_start(self):
+        """Hook: change the remote or the clone before the runner starts."""
 
     def kill(self):
         if self.proc.poll() is None:

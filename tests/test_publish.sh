@@ -20,7 +20,7 @@ git clone -q remote.git seed 2>/dev/null && cd seed
 git config user.email t@t; git config user.name seed
 cp "$SRC/tasks.py" "$SRC/board.py" "$SRC/repos.py" .
 echo "true" > .taskcheck
-for t in a b c d e; do TASKS_ROOT=. python3 tasks.py new $t "Task $t" >/dev/null; done
+for t in a b c d e; do TASKS_ROOT=. python3 tasks.py new $t "Task $t" --quality-exempt "fixture: publish scenarios" >/dev/null; done
 git add -A && git commit -qm init && git push -q -u origin main 2>/dev/null
 cd "$W"
 for c in A B C; do git clone -q remote.git $c; git -C $c config user.email t@t; git -C $c config user.name $c; done

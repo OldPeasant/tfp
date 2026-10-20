@@ -32,7 +32,7 @@ class Sandbox:
         self.env.pop("TASK_OWNER", None)
         self.env.pop("TASK_LEASE", None)
         for tid, title, deps in (("spec", "Spec", ""), ("api", "API", "spec"), ("ui", "UI", "api")):
-            self.tasks("new", tid, title, "--deps", deps)
+            self.tasks("new", tid, title, "--deps", deps, "--quality-exempt", "dashboard test fixture")
         run("git", "add", "-A", cwd=self.clone)
         run("git", "commit", "-qm", "init", cwd=self.clone)
         run("git", "push", "-qu", "origin", "main", cwd=self.clone)

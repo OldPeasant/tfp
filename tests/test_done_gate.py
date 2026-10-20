@@ -11,6 +11,9 @@ sys.path.insert(0, str(SRC))
 sys.dont_write_bytecode = True
 import tasks  # noqa: E402
 
+# these tests are about the other gates of done; the review-evidence gate has tests/test_quality_gate.py
+EXEMPT = ("--quality-exempt", "fixture for the criteria/check gates")
+
 CRITERIA = """## Acceptance criteria
 - [ ] login works in the browser
 - [ ] container image builds
@@ -40,8 +43,8 @@ class Board(unittest.TestCase):
         sh(self.w, "git", "config", "user.name", "human")
         for f in ("tasks.py", "board.py"):
             shutil.copy(SRC / f, self.w / f)
-        self.tp("new", "a", "Task A", "--touches", "frontend/src/app/state")
-        self.tp("new", "b", "Task B", "--touches", "frontend/src/app/state/catalog.store.ts,docs")
+        self.tp("new", "a", "Task A", "--touches", "frontend/src/app/state", *EXEMPT)
+        self.tp("new", "b", "Task B", "--touches", "frontend/src/app/state/catalog.store.ts,docs", *EXEMPT)
         a = self.w / "tasks" / "a.md"
         a.write_text(a.read_text().split("## Acceptance criteria")[0] + CRITERIA)
         (self.w / ".taskcheck").write_text("true\n")

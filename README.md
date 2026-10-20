@@ -197,6 +197,14 @@ reports, else `--limit-wait`, default 15 min) and rejoins by itself; the dashboa
 "usage limit". Sessions that fail 3 times in a row for other reasons (e.g. an expired login) are
 handled the same way and show as "paused". Check the log in that case.
 
+When the remote keeps refusing an agent's pushes (e.g. a token without the `workflow` scope, so GitHub
+rejects changes to `.github/workflows/*`), `release`, `hold` and `done` print `PUSH FAILED: <git error>`
+and exit non-zero. When a release or hold can't be pushed, or `done` fails with the same push error in 3
+sessions in a row, the runner stops working on that task: it shows as "blocked" with the error, starts no
+more sessions for it, and retries every 30 min (`--blocked-retry`) until a push works again or a human
+takes the task away. The retry is a release, or a hold for a `done` streak (so the task can't come back
+to the same refused push). Fix the cause (token, permissions), and the next retry goes through.
+
 Humans can use the same commands (`next`, `claim`, `done`) or claim tasks for themselves with
 `TASK_OWNER=alice`.
 

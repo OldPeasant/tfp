@@ -10,6 +10,8 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parent.parent
 sys.dont_write_bytecode = True
 
+# the contract that switches the gate on: the template in TFP itself, docs/QUALITY.md in a working repo
+CONTRACT = next(p for p in (SRC / "templates" / "quality" / "QUALITY.md", SRC / "docs" / "QUALITY.md") if p.exists())
 FILLER = "Checked every acceptance criterion against the diff and the spec; commands and results below. " * 3
 
 
@@ -45,7 +47,7 @@ class Gate(unittest.TestCase):
         (self.w / ".taskcheck").write_text("true\n")
         if self.GATE:
             (self.w / "docs").mkdir()
-            shutil.copy(SRC / "templates" / "quality" / "QUALITY.md", self.w / "docs" / "QUALITY.md")
+            shutil.copy(CONTRACT, self.w / "docs" / "QUALITY.md")
         self.commit_all("init")
         sh(self.w, "git", "push", "-q", "-u", "origin", "main")
 
