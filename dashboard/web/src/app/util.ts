@@ -81,15 +81,17 @@ export function markdown(src: string): string {
       continue;
     }
     const h = raw.match(/^(#{1,4})\s+(.*)$/);
-    const li = raw.match(/^\s*[-*]\s+(\[( |x|X)\]\s*)?(.*)$/);
+    const li = raw.match(/^(\s*)[-*]\s+(\[( |x|X|~)\]\s*)?(.*)$/);
     if (h) {
       close();
       out.push(`<h${h[1].length + 2}>${inline(h[2])}</h${h[1].length + 2}>`);
     } else if (li) {
       if (!list) out.push('<ul>');
       list = true;
-      const box = li[1] ? `<span class="box ${li[2] === ' ' ? '' : 'on'}" aria-label="${li[2] === ' ' ? 'open' : 'done'}"></span>` : '';
-      out.push(`<li class="${li[1] ? 'check' : ''}">${box}${inline(li[3])}</li>`);
+      const state = li[3] === ' ' ? 'open' : li[3] === '~' ? 'skipped' : 'done';
+      const box = li[2] ? `<span class="box ${state === 'done' ? 'on' : state === 'skipped' ? 'skip' : ''}" aria-label="${state}"></span>` : '';
+      const cls = [li[2] ? 'check' : '', li[1].length >= 2 ? 'sub' : ''].filter(Boolean).join(' ');
+      out.push(`<li class="${cls}">${box}${inline(li[4])}</li>`);
     } else if (!raw.trim()) {
       close();
     } else {

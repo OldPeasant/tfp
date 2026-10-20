@@ -1,4 +1,4 @@
-import { Task } from './store';
+import { openCriteria, Task } from './store';
 
 /** Every action the dashboard can run: what it is called, what it does (in plain words, shown before you
  * confirm), what it asks for, and the CLI command it runs (shown live, so the page teaches the CLI). */
@@ -60,10 +60,10 @@ export const ACTIONS: Record<string, ActionDef> = {
     label: 'Mark done',
     tone: 'go',
     explain:
-      'Merges the latest main into this clone, runs the project check on the result, and only if it passes marks the task done and pushes your commits to main. Commit your work first. If the check fails, nothing is pushed and the output tells you why.',
+      'Refuses while an acceptance criterion is unverified. Then merges the latest main into this clone, runs the project check on the result, and only if it passes marks the task done and pushes your commits to main. Commit your work first. If the check fails or takes too long, nothing is pushed and the output tells you why.',
     fields: [
       { key: 'skip_check', label: 'Skip the project check', type: 'check', help: 'Only if there is no meaningful check. Broken code would reach main.', advanced: true },
-      { ...force, advanced: true },
+      { ...force, label: 'Do it although it is not my task or criteria are unverified', advanced: true },
     ],
     cli: (p) => `${T} done ${p['id']}${sw(p, 'skip_check', '--skip-check')}${sw(p, 'force', '--force')}`,
   },
@@ -141,6 +141,19 @@ export const ACTIONS: Record<string, ActionDef> = {
       'Writes a decision taken without asking anyone into the task’s notes, so humans can review it later under “Assumptions”.',
     fields: [{ key: 'text', label: 'What was assumed, and why', type: 'textarea', required: true }],
     cli: (p) => `${T} assume ${p['id']} ${q(p['text'] || '<text>')}`,
+  },
+  verify: {
+    action: 'verify',
+    label: 'Verify criterion',
+    tone: 'go',
+    explain:
+      'Ticks this acceptance criterion and writes your evidence under it in the task file. Only what actually ran counts: the command, the setup it ran against, and its result. Tests that were found but not run, or “should work”, are no evidence.',
+    fields: [
+      { key: 'text', label: 'What you ran, and its result (or why it is skipped)', type: 'textarea', required: true, placeholder: 'npx playwright test login against docker compose up -> 8 passed' },
+      { key: 'skip', label: 'Can’t be met or verified here', type: 'check', help: 'Marks it skipped with your reason instead of verified. It stays visible for a human to follow up.' },
+      { ...force, advanced: true },
+    ],
+    cli: (p) => `${T} verify ${p['id']} ${p['n']} ${q(p['text'] || '<evidence>')}${sw(p, 'skip', '--skip')}${sw(p, 'force', '--force')}`,
   },
   confirm: {
     action: 'confirm',
@@ -309,7 +322,14 @@ export function offersFor(t: Task, me: string, frozen: boolean): { main: Offer[]
   } else if (t.state === 'done') {
     main.push({ key: 'followup', label: 'Add a follow-up task', hint: 'Done work is on main. Change it with a new task that depends on this one.' });
   } else if (mine) {
-    main.push({ key: 'done', hint: 'Commit first. Runs the check on your work merged with main, then pushes.', preset: id });
+    const left = openCriteria(t).length;
+    main.push({
+      key: 'done',
+      hint: left
+        ? `${left} acceptance criteri${left === 1 ? 'on is' : 'a are'} still unverified: verify ${left === 1 ? 'it' : 'them'} below first.`
+        : 'Commit first. Runs the check on your work merged with main, then pushes.',
+      preset: id,
+    });
     main.push({ key: 'release', hint: 'Give it back; your commits go to wip/' + t.id + '.', preset: id });
     more.push({ key: 'redo', hint: 'Unresolvable merge conflict: save this attempt, restart from main.', preset: id });
     more.push({ key: 'split', label: 'Split into subtasks', hint: 'Too big: describe the rest as 2–6 subtasks.' });

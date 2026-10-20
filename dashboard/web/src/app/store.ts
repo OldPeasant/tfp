@@ -13,6 +13,9 @@ export interface Assumption {
 }
 
 export const openAssumptions = (t: { assumptions: Assumption[] }) => t.assumptions.filter((a) => !a.review);
+/** An acceptance criterion: mark ' ' open, 'x' verified, '~' skipped with a reason (`tasks.py verify`). */
+export interface Criterion { n: number; mark: ' ' | 'x' | '~'; text: string; evidence: string[] }
+export const openCriteria = (t: { criteria: Criterion[] }) => t.criteria.filter((c) => c.mark === ' ');
 export interface SavedAttempt { n: number; branch: string; url: string | null }
 
 export interface Task {
@@ -31,6 +34,7 @@ export interface Task {
   parent: string;
   subtasks: string;
   deps: string[];
+  touches: string[];
   prio: number;
   body: string;
   dependents: number;
@@ -43,6 +47,7 @@ export interface Task {
   seen_at: number | null;
   health: '' | 'ok' | 'warn' | 'bad';
   assumptions: Assumption[];
+  criteria: Criterion[];
   saved_attempts: SavedAttempt[];
   unblocks_direct: string[];
   has_wip: boolean;

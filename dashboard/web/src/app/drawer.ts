@@ -98,12 +98,36 @@ interface Commit { at: number; who: string; commit: string; text: string }
           @if (t.has_wip) {
             <dt>Unfinished work</dt><dd><code>origin/wip/{{ t.id }}</code> <span class="muted">— the next owner starts from it</span></dd>
           }
+          @if (t.touches.length) {
+            <dt>Touches</dt>
+            <dd>@for (p of t.touches; track p) {<code class="touch">{{ p }}</code>}</dd>
+          }
           @if (t.parent) {<dt>Part of</dt><dd><button class="chip" (click)="ui.open(t.parent)">{{ t.parent }}</button></dd>}
           @if (t.subtasks) {
             <dt>Split into</dt>
             <dd>@for (s of t.subtasks.split(', '); track s) {<button class="chip" [attr.data-state]="store.byId().get(s)?.state" (click)="ui.open(s)">{{ s }}</button>}</dd>
           }
         </dl>
+
+        @if (t.criteria.length) {
+          <section>
+            <h3>Acceptance criteria <span class="muted small">{{ verified(t) }}</span></h3>
+            <ul class="crit-list">
+              @for (c of t.criteria; track c.n) {
+                <li [attr.data-mark]="c.mark === 'x' ? 'verified' : c.mark === '~' ? 'skipped' : 'open'">
+                  <p><span class="muted">#{{ c.n }}</span> {{ c.text }}</p>
+                  @for (e of c.evidence; track $index) {<p class="evidence">{{ e }}</p>}
+                  @if (c.mark === ' ' && t.status === 'in_progress' && t.owner === store.me()) {
+                    <span class="btns small">
+                      <button class="btn" (click)="ui.act('verify', { id: t.id, n: c.n }, 'Verify #' + c.n + ': ' + c.text)">Verify…</button>
+                      <button class="btn ghost" (click)="ui.act('verify', { id: t.id, n: c.n, skip: true }, 'Skip #' + c.n + ': ' + c.text)">Can’t verify…</button>
+                    </span>
+                  }
+                </li>
+              }
+            </ul>
+          </section>
+        }
 
         @if (t.assumptions.length) {
           <section>
@@ -168,6 +192,12 @@ export class TaskDrawer {
   }
 
   label = stateLabel;
+
+  verified(t: Task) {
+    const x = t.criteria.filter((c) => c.mark === 'x').length;
+    const skipped = t.criteria.filter((c) => c.mark === '~').length;
+    return `${x}/${t.criteria.length} verified${skipped ? `, ${skipped} skipped` : ''}`;
+  }
 
   actionLabel(k: string) {
     return ACTIONS[k]?.label ?? k;

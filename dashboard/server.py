@@ -104,7 +104,7 @@ def snapshot(ref):
     for t in ts.values():
         d = {k: v for k, v in t.items() if k != "path"}
         d.update(state=B.state_of(t), health=B.health(T, t, now), lease_end=T.lease_end(t),
-                 assumptions=T.assumption_entries(t),
+                 assumptions=T.assumption_entries(t), criteria=T.criteria_entries(t),
                  saved_attempts=[dict(n=n, branch=br, url=B.compare_url(T, base, br)) for n, br in tries.get(t["id"], [])],
                  unblocks_direct=[c["id"] for c in ts.values() if t["id"] in c["deps"]])
         out.append(d)
@@ -323,6 +323,11 @@ def build(action, p, jobs):
     if action == "assume":
         tid = need_id(p)
         return job(f"Record an assumption on {tid}", tasks_("assume", tid, need_text(p, "text", "The assumption")))
+    if action == "verify":
+        tid, n = need_id(p), num(p, "n", 1, 999)
+        return job(f"{'Skip' if p.get('skip') else 'Verify'} criterion #{n} of {tid}",
+                   tasks_("verify", tid, str(n), need_text(p, "text", "The evidence" if not p.get("skip") else "A reason"),
+                          *flag("skip", "--skip"), *flag("force", "--force")))
     if action in ("confirm", "reject"):
         tid = need_id(p)
         which = ["--all"] if p.get("all") else [str(num(p, "n", 1, 999))]

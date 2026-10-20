@@ -421,9 +421,18 @@ tr:last-child td { border-bottom: 0; }
 .assume-list li[data-review='confirmed'] { border-left-color: var(--ok); }
 .assume-list li[data-review='rejected'] { border-left-color: var(--bad); }
 .assume-list .btns { display: inline-flex; gap: 6px; margin-left: 8px; }
+.crit-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.crit-list li { border-left: 3px solid var(--warn); padding-left: 10px; font-size: 14px; }
+.crit-list li p { margin: 0; }
+.crit-list li[data-mark='verified'] { border-left-color: var(--ok); }
+.crit-list li[data-mark='skipped'] { border-left-color: var(--ink-3); }
+.crit-list li[data-mark='skipped'] > p:first-child { color: var(--ink-3); }
+.crit-list .evidence { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+.crit-list .btns { display: inline-flex; gap: 6px; margin-top: 4px; }
+.touch { margin-right: 6px; }
 .assume-all li[data-review='confirmed'] { border-left: 3px solid var(--ok); }
 .assume-all li[data-review='rejected'] { border-left: 3px solid var(--bad); }
-.assume-all li[data-review]:not([data-review='open']) > p:first-child { color: var(--muted); }
+.assume-all li[data-review]:not([data-review='open']) > p:first-child { color: var(--ink-3); }
 .btn[aria-pressed='true'] { border-color: currentColor; font-weight: 600; }
 .timeline { list-style: none; padding: 0; margin: 0; font-size: 13.5px; display: flex; flex-direction: column; gap: 5px; }
 .timeline .muted { display: inline-block; min-width: 92px; }
@@ -438,6 +447,8 @@ tr:last-child td { border-bottom: 0; }
 .md li.check { list-style: none; margin-left: -20px; display: flex; gap: 8px; }
 .md .box { flex: none; width: 14px; height: 14px; border: 1.5px solid var(--ink-3); border-radius: 3px; margin-top: 4px; }
 .md .box.on { background: var(--ok); border-color: var(--ok); }
+.md .box.skip { background: linear-gradient(var(--ink-3), var(--ink-3)) center / 8px 1.5px no-repeat; }
+.md li.sub { margin-left: 22px; font-size: 13px; color: var(--ink-3); }
 .md pre, .output {
   font: 12.5px/1.5 var(--mono); background: var(--sand); padding: 10px 12px; border-radius: 8px;
   overflow: auto; white-space: pre-wrap; word-break: break-word; max-height: 300px; margin: 8px 0;

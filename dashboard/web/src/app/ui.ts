@@ -38,11 +38,11 @@ export class Ui {
     this.task.set(id);
   }
 
-  act(key: string, preset?: Record<string, any>) {
+  act(key: string, preset?: Record<string, any>, title?: string) {
     if (key === 'edit') return this.editor.set({ mode: 'edit', id: preset?.['id'] ?? this.task() ?? undefined });
     if (key === 'followup') return this.editor.set({ mode: 'new', deps: [preset?.['id'] ?? this.task()!] });
     if (key === 'new') return this.editor.set({ mode: 'new', deps: preset?.['deps'] });
     if (key === 'split') return this.split.set(preset?.['id'] ?? this.task());
-    this.dialog.set({ key, preset });
+    this.dialog.set({ key, preset, title });
   }
 }

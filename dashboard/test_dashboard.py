@@ -160,7 +160,8 @@ class Server(unittest.TestCase):
                                ("nope", {}), ("agents_start", {"n": 99}), ("agents_start", {"n": 1, "host": "a b"}),
                                ("repos", {"what": "add", "folder": "../x", "url": "u"}), ("agent_stop", {"name": "x; rm"}),
                                ("confirm", {"id": "api"}), ("confirm", {"id": "api", "n": "1; rm"}),
-                               ("reject", {"id": "api", "n": 1})):
+                               ("reject", {"id": "api", "n": 1}), ("verify", {"id": "api", "n": 1}),
+                               ("verify", {"id": "api", "text": "x"})):
             code, r = self.call("/api/action", {"action": action, "params": params})
             self.assertEqual(code, 400, (action, params, r))
 
@@ -198,6 +199,30 @@ class Server(unittest.TestCase):
         self.assertEqual(got["REST, not GraphQL"][:2], (1, "confirmed"))
         self.assertEqual(got["ids are UUIDs"], (2, "rejected", "numeric ids"))
         self.assertEqual(self.act("confirm", id="api", n=1)["state"], "failed")  # already confirmed
+
+    def test_verify_criteria_and_done_gate(self):
+        r = self.sb.edit("crit", "---\ntitle: Criteria\ndeps: []\ntouches: [frontend]\n---\n## Goal\n\n"
+                                 "## Acceptance criteria\n- [ ] login works\n- [ ] image builds\n\n## Notes\n", create=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.act("claim", id="crit")["state"], "ok")
+        j = self.act("done", id="crit")
+        self.assertEqual(j["state"], "failed")
+        self.assertIn("nobody verified", j["output"])
+        j = self.act("verify", id="crit", n=1, text="playwright login -> 3 passed")
+        self.assertEqual(j["state"], "ok", j["output"])
+        self.assertEqual(self.act("verify", id="crit", n=2, text="no docker", skip=True)["state"], "ok")
+        self.assertIn("- [x] login works\n  - verified (", self.sb.on_origin("crit"))
+        for _ in range(100):
+            crit = next((t for t in self.call("/api/state")[1]["board"]["tasks"] if t["id"] == "crit"), None)
+            if crit and crit["criteria"][1]["mark"] == "~":
+                break
+            self.call("/api/refresh", {})
+            time.sleep(0.1)
+        self.assertEqual([(c["n"], c["mark"], c["text"]) for c in crit["criteria"]],
+                         [(1, "x", "login works"), (2, "~", "image builds")])
+        self.assertIn("playwright login -> 3 passed", crit["criteria"][0]["evidence"][0])
+        self.assertEqual(crit["touches"], ["frontend"])
+        self.assertEqual(self.act("release", id="crit")["state"], "ok")
 
     def test_act_as(self):
         self.assertEqual(self.act("act_as", who="bob")["state"], "ok")

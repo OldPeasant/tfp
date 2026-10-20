@@ -154,6 +154,20 @@ def criteria(text):
     return out
 
 
+def criteria_entries(t):
+    """The acceptance criteria of a parsed task, numbered from 1 as `verify` counts them, each with the
+    evidence lines recorded under it (for the dashboard)."""
+    lines = t["body"].split("\n")
+    out = []
+    for n, (i, mark, text) in enumerate(criteria(t["body"]), 1):
+        ev, j = [], i + 1
+        while j < len(lines) and lines[j].startswith("  "):
+            ev.append(re.sub(r"^- ", "", lines[j].strip()))
+            j += 1
+        out.append(dict(n=n, mark=mark, text=text, evidence=ev))
+    return out
+
+
 def overlaps(a, b):
     """The paths two `touches` lists share: the same path, or one inside the other (the inner one)."""
     def norm(p):
