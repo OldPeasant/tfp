@@ -15,7 +15,7 @@ Needs only Python 3 and git.
 | `templates/claude-agents/` | test-writer, code-reviewer and fixer sub-agents (copy into `.claude/agents/`) |
 | `templates/quality/QUALITY.md` | opt-in review-evidence gate for `done`: copy to `docs/QUALITY.md` to switch it on (SETUP.md A.8) |
 | `tests/test_publish.sh` | scenario tests: status changes never push unfinished code to main (`bash tests/test_publish.sh`) |
-| `tests/test_*.py` | tests for evidence, check limits, `touches`, assumptions, over-budget tasks, the review gate (`python3 tests/test_done_gate.py`, ...) |
+| `tests/test_*.py` | tests for evidence, check limits, `touches`, assumptions, over-budget tasks, the review gate, push races, catching up with main after a merge (`python3 tests/test_done_gate.py`, ...) |
 
 ## Contest quick start
 The setup below is for work that spans several existing repos (e.g. frontend + backend on GitLab, maybe

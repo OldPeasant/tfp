@@ -401,6 +401,16 @@ def cmd_stop(a):
 
 
 # ---------- per-agent loop ----------
+def import_tasks(clone):
+    """The tasks.py next to this agents.py (same checkout, so the same version), working on `clone` via
+    TASKS_ROOT. Not the clone's own copy: a clone that is behind main has an older tasks.py, and the runner
+    would crash on whatever this agents.py needs that it lacks. Only without one here, the clone's."""
+    here = Path(__file__).resolve().parent
+    sys.path.insert(0, str(here if (here / "tasks.py").exists() else clone))
+    import tasks
+    return tasks
+
+
 def park(clone, log):
     """Move local work that belongs to no task we own (lease lost, released, crash) onto a local
     lost/<time> branch and reset to origin, so it never reaches main with the next task."""
@@ -433,8 +443,7 @@ def cmd_run(a):
         if not (shim / "python").exists():
             (shim / "python").symlink_to(sys.executable)
         os.environ["PATH"] = f"{shim}{os.pathsep}{os.environ['PATH']}"
-    sys.path.insert(0, str(clone))
-    import tasks
+    tasks = import_tasks(clone)
     log = lambda m: print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
     log(f"{a.name} up as {a.owner}; lease {a.lease}s; cmd: {a.cmd}")
     if not hb.exists():
@@ -510,7 +519,7 @@ def cmd_run(a):
             note = f"handed off by {a.owner}: {one_line(reason, 120)}"
             last = give_up(tid, ["release", tid, "--handoff", "--note", note], "hand-off")
             if last is None:
-                continue  # still ours: stays in `held`, the blocked loop retries the release
+                continue  # still ours: stays in `held`, the blocked loop (or the next round) retries it
             log(f"handed off {tid}: {last}")
             held.discard(tid)
 
@@ -557,7 +566,8 @@ def cmd_run(a):
         """Run `tasks.py <cmd>` (release/hold of tid). If it fails for another reason than a refused push (e.g. a
         conflict while catching up), save the work to wip/<task> ourselves, reset to @{u} and run it again.
         Returns its last output line if the task is no longer ours; else logs "<label> FAILED", blocks the task
-        (the remote refuses our pushes: the work stays here, it is not reset away) and returns None.
+        (the remote refuses our pushes: the work stays here, it is not reset away) and returns None. If its
+        pushes only lost every race to other agents, it returns None without blocking: the next round retries.
         A dirty tree is committed first (`release`/`hold` refuse it, and the reset would lose it)."""
         if tasks.merge_state():
             sh("git", tasks.merge_state(), "--abort", cwd=clone)
@@ -567,9 +577,13 @@ def cmd_run(a):
 
         def run():
             t0 = time.time()
-            p = sh(sys.executable, "tasks.py", *cmd, cwd=clone)
-            if tasks.merge_state():
-                sh("git", tasks.merge_state(), "--abort", cwd=clone)
+            for _ in range(3):  # pushes that lost every race to other agents: not refused, try again
+                p = sh(sys.executable, "tasks.py", *cmd, cwd=clone)
+                if tasks.merge_state():
+                    sh("git", tasks.merge_state(), "--abort", cwd=clone)
+                if not p.returncode or tasks.RACE_HINT not in p.stdout + p.stderr:
+                    break
+                time.sleep(5)
             return p, push_failure(t0)
         p, pf = run()
         err = None
@@ -586,8 +600,14 @@ def cmd_run(a):
         out = (p.stdout + p.stderr).strip().splitlines() or ["?"]
         if not err and p.returncode == 0 and tid not in owned_ids():
             return out[-1]
+        if not err and not pf and any(tasks.RACE_HINT in l for l in out):  # not refused: nothing for a human
+            log(f"{label} of {tid} lost every push race to other agents, trying again later: "
+                f"{one_line(next(l for l in out if tasks.RACE_HINT in l), 300)}")
+            if tid in blocked:
+                blocked[tid][1] = time.time() + 60  # blocked before: retry soon, not after --blocked-retry
+            return None
         err = err or (pf.get("error", "?") if pf else next(  # the error, not the last line of a help text
-            (l for l in out if l.startswith(("PUSH FAILED", "CONFLICT", "REFUSED", "git ", "no such task"))), out[-1]))
+            (l for l in out if l.startswith(("PUSH FAILED", "BUSY", "CONFLICT", "REFUSED", "git ", "no such task"))), out[-1]))
         log(f"{label} FAILED for {tid} (exit {p.returncode}): {one_line(err, 300)}")
         block(tid, err)
         return None
@@ -595,7 +615,8 @@ def cmd_run(a):
     def force_release(tid, note, handoff=False):
         """A review that decided nothing: commit what is there and give the task to another agent. Over
         budget is not a reason for a human; a counted release still holds it after MAX_RELEASES.
-        Returns True if the task is no longer ours; else (the release could not push) the task is blocked.
+        Returns True if the task is no longer ours; else (the release could not push) the task is blocked,
+        unless its pushes only lost races (then the next round tries again).
         (give_up() aborts an unfinished merge and commits a dirty tree first.)"""
         last = give_up(tid, ["release", tid, "--note", note, *(["--handoff"] if handoff else [])], "release")
         if last is not None:

@@ -302,6 +302,28 @@ def pushed(*a):
     return p.returncode == 0
 
 
+# git's words for a push that lost a race with another agent's push (retrying helps), and for a remote that
+# refuses it (auth, permissions, a protected branch, a hook: retrying won't help). A refusal word wins; an
+# error with neither (a network blip, an HTTP 500) is retried like a race but reported as a failure in the end.
+RACE_ERRORS = ("non-fast-forward", "fetch first", "cannot lock ref", "failed to lock", "failed to update ref",
+               "incorrect old value", "stale info", "(failed)")
+REFUSED_ERRORS = ("hook declined", "denied", "permission", "protected branch", "authentication", "unauthorized",
+                  "forbidden", "error: 403", "not allowed", "refusing", "denying", "push declined", "rule violation")
+RACE_HINT = "lost the push race"  # in the message of a command whose pushes lost every race; agents.py retries it
+
+
+def refused(err=None):
+    """True if git's push error (default: the last failed push) is a refusal: retrying won't help."""
+    e = (push_error[0] if err is None else err).lower()
+    return any(w in e for w in REFUSED_ERRORS)
+
+
+def lost_race(err=None):
+    """True if git's push error (default: the last failed push) is a lost race, not a refusal."""
+    e = (push_error[0] if err is None else err).lower()
+    return any(w in e for w in RACE_ERRORS) and not refused(e)
+
+
 def push_failed(tid, hint):
     """Exit with `PUSH FAILED: <git error>` and a hint, no traceback. Also leaves the failure in the git
     dir for the runner (agents.py), so it stops starting sessions on a task whose pushes keep failing."""
@@ -347,11 +369,20 @@ def no_unfinished_merge():
 
 
 def sync():
+    """Catch up with main: rebase our unpushed commits, or merge main if they contain a merge (a merged
+    wip/<id>, or `git merge origin/main` after conflicts). A rebase would flatten that merge and replay
+    every merged commit, with the very conflicts the merge resolved."""
     no_unfinished_merge()
-    if upstream() and git("pull", "--rebase", "--autostash", check=False).returncode:
+    if not upstream():
+        return
+    fetched = git("fetch", "-q", check=False).returncode == 0  # failed: the pull below reports it
+    if fetched and git("merge-base", "--is-ancestor", "@{u}", "HEAD", check=False).returncode == 0:
+        return  # main is already in our history: nothing to catch up (and nothing to flatten)
+    how = "--no-rebase" if git("rev-list", "--merges", "-n1", "@{u}..HEAD").stdout.strip() else "--rebase"
+    if git("pull", how, "--no-edit", "--autostash", check=False).returncode:
         if merge_state():
             sys.exit(f"CONFLICT while catching up with main in: {' '.join(conflicted())}\n{CONFLICT_HELP}")
-        git("pull", "--rebase", "--autostash")  # not a conflict: fail with git's own message
+        git("pull", how, "--no-edit", "--autostash")  # not a conflict: fail with git's own message
 
 
 def check_cmd():
@@ -482,15 +513,20 @@ def update(tid, msg, guard, append=None, extra=None, with_code=False, **fields):
         if upstream() and not with_code:
             if publish(paths, m):
                 return t, None
-            continue  # lost the push race: re-read, re-judge
-        git("add", *paths)
-        git("commit", "-m", m, "--", *paths)
-        if not upstream() or pushed():
-            return t, None
-        git("reset", "--keep", "HEAD~1")  # lost the push race: forget our commit, re-read, re-judge
-    push_failed(tid, f"Could not record '{m}' on the board after 5 attempts: the remote "
-                "refuses the push (auth, permissions, a hook?), so retrying won't help. Nothing changed on the board. "
-                f"Only a human can fix it: stop working on {tid} and end the session.")
+        else:
+            git("add", *paths)
+            git("commit", "-m", m, "--", *paths)
+            if not upstream() or pushed():
+                return t, None
+            git("reset", "--keep", "HEAD~1")  # forget our commit, re-read, re-judge
+        if refused():
+            break
+    if not lost_race():  # refused, or failed 5 times for another reason than a lost race
+        push_failed(tid, f"Could not record '{m}' on the board: the remote refuses the push (auth, "
+                    "permissions, a protected branch, a hook?), so retrying won't help. Nothing changed on the "
+                    f"board. Only a human can fix it: stop working on {tid} and end the session.")
+    sys.exit(f"BUSY: could not record '{m}' on the board: {RACE_HINT} 5 times (other agents pushed in between: "
+             f"{push_error[0]}). Nothing changed on the board and {tid} is not blocked; try again.")
 
 
 def owned_by_me(t):
@@ -937,7 +973,15 @@ def save_work(tid):
                  "push or move them first, or they would land on main with the release.")
     if dirty():
         sys.exit(f"REFUSED: commit your changes first; they will be saved to {wip_branch(tid)}, not main.")
-    if not pushed("-q", "-f", remote(), f"HEAD:refs/heads/{wip_branch(tid)}"):
+    for _ in range(5):  # a force push races only with our own runner's backup of the same branch
+        ok = pushed("-q", "-f", remote(), f"HEAD:refs/heads/{wip_branch(tid)}")
+        if ok or refused():
+            break
+        time.sleep(1)
+    if not ok and lost_race():
+        sys.exit(f"BUSY: could not save your {ahead} commit(s) to {remote()}/{wip_branch(tid)}: {RACE_HINT} 5 times "
+                 f"({push_error[0]}). {tid} is unchanged on the board (still yours); try again.")
+    if not ok:
         push_failed(tid, f"Could not save your {ahead} commit(s) to {remote()}/{wip_branch(tid)}: the remote refuses "
                     f"them, so retrying won't help. {tid} is unchanged on the board (still yours) and your commits are "
                     "still here, unpushed. Only a human can fix it (e.g. a token without `workflow` scope cannot push "
