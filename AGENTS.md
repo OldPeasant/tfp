@@ -192,8 +192,11 @@ You can also decide this earlier, as soon as you see it:
   committed work goes to `wip/<id>` for the subtasks. The original task then waits for them; whoever
   claims it afterwards only integrates and verifies its acceptance criteria. Subtasks can't be split
   again: hand them off instead.
-- **Hand off** (out of budget, but the task is still valid and resumable, e.g. only final review, the
-  check or `done` is left, and splitting would be artificial): commit, then
+- **Finish:** if every criterion is verified and the evidence `done` needs is committed, run
+  `python tasks.py done <id>`, also when you are out of budget: handing off a task whose only remaining step
+  is `done` costs another agent a whole session.
+- **Hand off** (out of budget, but the task is still valid and resumable, e.g. only final review or a
+  small fix is left, and splitting would be artificial): commit, then
   `python tasks.py release <id> --note "<what is done, exactly what is left>"`. Another agent continues
   from your commits. A review that decides nothing does this for you.
 - **Stuck**, only when a person is really needed (unclear requirement, missing dependency, a decision is

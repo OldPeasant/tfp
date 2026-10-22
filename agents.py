@@ -22,10 +22,11 @@ releases its task (work saved to wip/<task>, a note says why) so agents on other
 then waits until the limit resets (the time Claude reports, else --limit-wait) and carries on.
 
 Task budget: after --task-budget sessions (default 2, ~30 min each) on one task, the next session is a
-review: the agent must extend it once (nearly done), split it into subtasks, hand it to another agent
-(release with a handoff note) or, only if a person is really needed, put it on hold. A review that decides
-nothing releases the task too: being over budget alone never needs a human. Releases are counted, so a
-task nobody can finish still ends up on hold after a few (tasks.py MAX_RELEASES). The runner then
+review: the agent must run `done` if that is all that is left, extend it once (nearly done), split it into
+subtasks, hand it to another agent (release with a handoff note) or, only if a person is really needed,
+put it on hold. A review that decides nothing releases the task too: being over budget alone never needs
+a human. Releases are counted, so a task nobody can finish still ends up on hold after a few (tasks.py
+MAX_RELEASES). The runner then
 prefers other ready tasks for a while (--avoid, default 300 s) instead of reclaiming the one it gave up.
 
 Push failures: when the remote keeps refusing a task's pushes (e.g. a token without `workflow` scope,
@@ -94,11 +95,14 @@ a task should take, so do NOT continue implementing in this session. Instead:
 1. Commit your current work (never git push).
 2. Assess honestly: read tasks/{id}.md and `git log`, work out what is done and what is left, run the check.
 3. Choose exactly one, run it, then stop:
+   - Finished (every acceptance criterion is verified, and the evidence `done` needs is committed):
+     `python tasks.py done {id}`. Never hand off a task whose only remaining step is `done`. If `done`
+     refuses or its check fails for a reason you cannot fix in a few minutes, choose another option
 {extend}   - Too big: write the remaining work as 2-6 subtasks into a file (format: AGENTS.md "Too big or
      stuck"), then `python tasks.py split {id} --from <file> --note "<what is done so far>"`
-   - Hand off (the task is still valid and resumable, e.g. only finalization is left, but splitting it
-     would be artificial): `python tasks.py release {id} --note "<what is done, exactly what is left>"`;
-     another agent continues from your commits
+   - Hand off (the task is still valid and resumable, e.g. only the final review or a small fix is
+     left, but splitting it would be artificial): `python tasks.py release {id} --note "<what is done,
+     exactly what is left>"`; another agent continues from your commits
    - Stuck, ONLY if a person is really needed (unclear requirement, missing dependency, a decision is
      needed, the check fails for reasons outside this task): `python tasks.py hold {id} "<what a human
      must decide or do>"`. Taking longer than planned is not a reason to hold.
