@@ -58,6 +58,24 @@ exit 0
 ''')
 
 
+def gh006_hook(tmp, times):
+    """GitHub's protected-branch refusal without a race: each of the next `times` pushes to main is refused with
+    GH006 although main has not moved (seen on GitHub for valid fast-forward pushes). Counts them in
+    remote.git/refusals."""
+    return hook(tmp, f'''#!/bin/sh
+while read old new ref; do
+  [ "$ref" = refs/heads/main ] || continue
+  n=$(cat refusals 2>/dev/null || echo 0)
+  [ "$n" -ge {times} ] && continue
+  echo $((n + 1)) > refusals
+  echo "error: GH006: Protected branch update failed for refs/heads/main." >&2
+  echo "error:" >&2
+  exit 1
+done
+exit 0
+''')
+
+
 def flaky_hook(tmp, times):
     """The connection drops during each of the next `times` pushes (git: `the remote end hung up unexpectedly`):
     an error that is neither a lost race nor a refusal. Counts them in remote.git/drops."""
@@ -204,6 +222,13 @@ class Classify(unittest.TestCase):
                     "error: failed to push some refs to 'https://example.test/o/r.git'"):
             self.assertTrue(tasks.refused(err), err)
             self.assertFalse(tasks.lost_race(err), err)
+
+    def test_gh006_is_neither(self):  # GitHub sends it for valid pushes now and then: retried, refused if it persists
+        err = ("remote: error: GH006: Protected branch update failed for refs/heads/main. | remote: error: | "
+               "To https://github.com/o/r.git | ! [remote rejected] 7faa13c8 -> main (protected branch hook declined) | "
+               "error: failed to push some refs to 'https://github.com/o/r.git'")
+        self.assertFalse(tasks.refused(err))
+        self.assertFalse(tasks.lost_race(err))
 
     def test_without_an_argument_the_last_push_error_is_classified(self):  # how update()/save_work() call them
         old = tasks.push_error[0]
@@ -432,12 +457,34 @@ class Races(Board):
         self.assertEqual(field(self.remote_task("a"), "status"), "done")
         self.assertIn("work.txt", sh(self.tmp, "git", "--git-dir=remote.git", "ls-tree", "--name-only", "main").stdout)
 
-    def test_protected_branch_refusal_without_a_race_is_still_refused(self):
-        hook(self.tmp, "#!/bin/sh\necho 'error: GH006: Protected branch update failed for refs/heads/main.' >&2\n"
-                       "exit 1\n")
+    def test_board_push_refused_with_gh006_now_and_then_is_retried(self):
+        gh006_hook(self.tmp, 2)  # main has not moved: GitHub refused valid pushes
+        p = self.tp("release", "a", "--note", "x", who=self.who, check=False)
+        out = p.stdout + p.stderr
+        self.assertEqual(p.returncode, 0, out)
+        self.assertIn("RELEASED a", out)
+        self.assertNotIn("PUSH FAILED", out)
+        self.assertEqual(counted(self.tmp, "refusals"), 2)
+        self.assertFalse(self.failure_file().exists())
+        self.assertEqual(field(self.remote_task("a"), "status"), "todo")
+
+    def test_done_push_refused_with_gh006_once_is_retried_and_keeps_the_code(self):
+        self.commit_work()
+        gh006_hook(self.tmp, 1)
+        p = self.tp("done", "a", "--force", who=self.who, check=False)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(counted(self.tmp, "refusals"), 1)
+        self.assertEqual(field(self.remote_task("a"), "status"), "done")
+        self.assertIn("work.txt", sh(self.tmp, "git", "--git-dir=remote.git", "ls-tree", "--name-only", "main").stdout)
+
+    def test_board_push_that_keeps_getting_gh006_without_a_race_is_refused_after_5_attempts(self):
+        gh006_hook(self.tmp, 100)
         p = self.tp("release", "a", "--note", "x", who=self.who, check=False)
         self.assert_refused(p)
         self.assertIn("GH006", p.stdout + p.stderr)
+        self.assertEqual(counted(self.tmp, "refusals"), 5)
+        t = self.remote_task("a")
+        self.assertEqual((field(t, "status"), field(t, "owner")), ("in_progress", self.who))
 
     def test_hold_that_loses_every_race_is_not_refused(self):
         lock = self.lock("main")

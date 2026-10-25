@@ -325,6 +325,10 @@ RACE_ERRORS = ("non-fast-forward", "fetch first", "cannot lock ref", "failed to 
 REFUSED_ERRORS = ("hook declined", "denied", "permission", "protected branch", "authentication", "unauthorized",
                   "forbidden", "error: 403", "not allowed", "refusing", "denying", "push declined", "rule violation")
 RACE_HINT = "lost the push race"  # in the message of a command whose pushes lost every race; agents.py retries it
+# GitHub's protected-branch refusal (GH006) also comes, without a reason, for a valid fast-forward push now and
+# then: retried like an unknown error, so it counts as a refusal (PUSH FAILED) only if it persists
+TRANSIENT_ERRORS = ("gh006",)
+RETRY_PAUSE = 2  # seconds before trying again after a push failure that was no lost race
 
 
 def refused(err=None):
@@ -333,7 +337,7 @@ def refused(err=None):
     if err is None and push_moved[0]:
         return False
     e = (push_error[0] if err is None else err).lower()
-    return any(w in e for w in REFUSED_ERRORS)
+    return not any(w in e for w in TRANSIENT_ERRORS) and any(w in e for w in REFUSED_ERRORS)
 
 
 def lost_race(err=None):
@@ -541,6 +545,8 @@ def update(tid, msg, guard, append=None, extra=None, with_code=False, **fields):
             git("reset", "--keep", "HEAD~1")  # forget our commit, re-read, re-judge
         if refused():
             break
+        if not lost_race():
+            time.sleep(RETRY_PAUSE)  # e.g. GH006 for a valid push: give the remote a moment
     if not lost_race():  # refused, or failed 5 times for another reason than a lost race
         push_failed(tid, f"Could not record '{m}' on the board: the remote refuses the push (auth, "
                     "permissions, a protected branch, a hook?), so retrying won't help. Nothing changed on the "
