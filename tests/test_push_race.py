@@ -35,6 +35,29 @@ exit 0
 ''')
 
 
+def protected_race_hook(tmp, prefix, times):
+    """Like race_hook, but the remote answers like a protected branch on GitHub: another agent's push lands
+    first, and ours is refused with GH006 (`protected branch hook declined`) instead of `fetch first`.
+    Counts them in remote.git/races."""
+    return hook(tmp, f'''#!/bin/sh
+while read old new ref; do
+  [ "$ref" = refs/heads/main ] || continue
+  case "$(git log -1 --format=%s "$new")" in "{prefix}"*) ;; *) continue ;; esac
+  n=$(cat races 2>/dev/null || echo 0)
+  [ "$n" -ge {times} ] && continue
+  echo $((n + 1)) > races
+  # the winner's commit goes to the real object store: the quarantine of our refused push is thrown away
+  (unset GIT_QUARANTINE_PATH GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+   c=$(git commit-tree -p "$old" -m "another agent's push" "$(git rev-parse "$old^{{tree}}")")
+   git update-ref "$ref" "$c" "$old")
+  echo "error: GH006: Protected branch update failed for refs/heads/main." >&2
+  echo "error:" >&2
+  exit 1
+done
+exit 0
+''')
+
+
 def flaky_hook(tmp, times):
     """The connection drops during each of the next `times` pushes (git: `the remote end hung up unexpectedly`):
     an error that is neither a lost race nor a refusal. Counts them in remote.git/drops."""
@@ -379,6 +402,42 @@ class Races(Board):
         self.assertFalse(self.failure_file().exists())
         main = sh(self.tmp, "git", "--git-dir=remote.git", "log", "--format=%s", "main").stdout
         self.assertEqual(main.count("another agent's push"), 4)  # the winners' commits are kept, not overwritten
+
+    def test_board_push_that_loses_races_on_a_protected_branch_is_retried(self):
+        protected_race_hook(self.tmp, "release: a", 2)  # GitHub's GH006 for a push that is behind main
+        p = self.tp("release", "a", "--note", "x", who=self.who, check=False)
+        out = p.stdout + p.stderr
+        self.assertEqual(p.returncode, 0, out)
+        self.assertIn("RELEASED a", out)
+        self.assertNotIn("PUSH FAILED", out)
+        self.assertEqual(races(self.tmp), 2)
+        self.assertFalse(self.failure_file().exists(), "a lost race must not block the task")
+        self.assertEqual(field(self.remote_task("a"), "status"), "todo")
+
+    def test_board_push_that_loses_every_race_on_a_protected_branch_is_not_refused(self):
+        protected_race_hook(self.tmp, "release: a", 5)
+        p = self.tp("release", "a", "--note", "x", who=self.who, check=False)
+        self.assert_lost_race(p)
+        self.assertIn("GH006", p.stdout + p.stderr)  # git's error is shown
+        self.assertEqual(races(self.tmp), 5)
+
+    def test_done_that_loses_a_race_on_a_protected_branch_is_retried_and_keeps_the_code(self):
+        self.commit_work()
+        protected_race_hook(self.tmp, "done: a", 1)
+        p = self.tp("done", "a", "--force", who=self.who, check=False)
+        out = p.stdout + p.stderr
+        self.assertEqual(p.returncode, 0, out)
+        self.assertNotIn("PUSH FAILED", out)
+        self.assertEqual(races(self.tmp), 1)
+        self.assertEqual(field(self.remote_task("a"), "status"), "done")
+        self.assertIn("work.txt", sh(self.tmp, "git", "--git-dir=remote.git", "ls-tree", "--name-only", "main").stdout)
+
+    def test_protected_branch_refusal_without_a_race_is_still_refused(self):
+        hook(self.tmp, "#!/bin/sh\necho 'error: GH006: Protected branch update failed for refs/heads/main.' >&2\n"
+                       "exit 1\n")
+        p = self.tp("release", "a", "--note", "x", who=self.who, check=False)
+        self.assert_refused(p)
+        self.assertIn("GH006", p.stdout + p.stderr)
 
     def test_hold_that_loses_every_race_is_not_refused(self):
         lock = self.lock("main")

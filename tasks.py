@@ -291,15 +291,30 @@ def git(*a, check=True, env=None):
 
 PUSH_FAILURE = "tfp-push-failed"  # in the git dir: the push the remote refused last, read by agents.py
 CMD, push_error = [""], [""]  # the tasks.py command running, git's error of the last failed push
+push_moved = [False]  # the branch of the last failed push had moved past the commit we built on
 REASON = [""]  # the reason of a `hold` running: the runner retries the hold with it once pushes work
 
 
-def pushed(*a):
-    """git push; returns True if it worked, else remembers git's error (on one line) for push_failed()."""
+def pushed(*a, base=None):
+    """git push; returns True if it worked, else remembers git's error (on one line) for push_failed().
+    `base` is (remote, branch, commit our push was built on). If the branch has moved past that commit
+    when the push fails, the push lost a race whatever the remote says: a protected branch answers a
+    race with GH006 ("protected branch hook declined") instead of "fetch first"."""
     p = git("push", *a, check=False)
+    push_moved[0] = False
     if p.returncode:
         push_error[0] = " | ".join(l.strip() for l in p.stderr.splitlines() if l.strip()) or f"exit {p.returncode}"
+        if base:
+            r, branch, sha = base
+            now = git("ls-remote", r, f"refs/heads/{branch}", check=False).stdout.split()
+            push_moved[0] = bool(now) and now[0] != sha
     return p.returncode == 0
+
+
+def upstream_base():
+    """(remote, branch, commit) of the upstream as we last fetched it: the `base` of a push of HEAD."""
+    r, branch = upstream().split("/", 1)
+    return r, branch, git("rev-parse", "@{u}").stdout.strip()
 
 
 # git's words for a push that lost a race with another agent's push (retrying helps), and for a remote that
@@ -313,13 +328,18 @@ RACE_HINT = "lost the push race"  # in the message of a command whose pushes los
 
 
 def refused(err=None):
-    """True if git's push error (default: the last failed push) is a refusal: retrying won't help."""
+    """True if git's push error (default: the last failed push) is a refusal: retrying won't help.
+    The last failed push is never a refusal if its branch had moved on (see pushed())."""
+    if err is None and push_moved[0]:
+        return False
     e = (push_error[0] if err is None else err).lower()
     return any(w in e for w in REFUSED_ERRORS)
 
 
 def lost_race(err=None):
     """True if git's push error (default: the last failed push) is a lost race, not a refusal."""
+    if err is None and push_moved[0]:
+        return True
     e = (push_error[0] if err is None else err).lower()
     return any(w in e for w in RACE_ERRORS) and not refused(e)
 
@@ -469,7 +489,7 @@ def publish(paths, msg):
     finally:
         index.unlink(missing_ok=True)
     new = git("commit-tree", tree, "-p", base, "-m", msg).stdout.strip()
-    ok = pushed("-q", r, f"{new}:refs/heads/{branch}")
+    ok = pushed("-q", r, f"{new}:refs/heads/{branch}", base=(r, branch, base))
     tracked = set(git("ls-tree", "-r", "--name-only", "HEAD", "--", *rels).stdout.split())
     if tracked:
         git("checkout", "HEAD", "--", *sorted(tracked))
@@ -516,7 +536,7 @@ def update(tid, msg, guard, append=None, extra=None, with_code=False, **fields):
         else:
             git("add", *paths)
             git("commit", "-m", m, "--", *paths)
-            if not upstream() or pushed():
+            if not upstream() or pushed(base=upstream_base()):
                 return t, None
             git("reset", "--keep", "HEAD~1")  # forget our commit, re-read, re-judge
         if refused():
