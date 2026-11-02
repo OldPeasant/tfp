@@ -718,6 +718,8 @@ REPORT_SECTION = {"tests.md": "## Coverage", "review.md": "## Review conclusion"
 PLACEHOLDER = re.compile(r"<(?:YYYY-MM-DD|task-id[^>]*|resolved Git scope|sources used|hash[^>]*|count|"
                          r"command[^>]*|path|number|Pass / Fail[^>]*|bug title|finding-id|title|"
                          r"current task or supplied scope|P[0-3] count)>|\bTODO\b|\bTBD\b|lorem ipsum", re.I)
+# A quoted HTML element (`<title>Slow</title>`) is content, not an unfilled template placeholder like `<title>`.
+HTML_ELEMENT = re.compile(r"<([A-Za-z][\w-]*)>[^<>\n]*</\1>")
 MIN_REPORT_CHARS = 200  # non-whitespace characters: a heading and "ok" is not a report
 RESOLVED = {"fixed", "invalid", "out_of_scope", "deferred", "accepted"}  # "open" = unresolved
 FIXED_ONLY = {"P0", "P1"}  # blocking severities: must be fixed or shown invalid
@@ -797,7 +799,7 @@ def quality_errors(tid, ref="HEAD"):
             continue
         if len(re.sub(r"\s", "", text)) < MIN_REPORT_CHARS:
             errs.append(f"{path} is empty or too short to be a report")
-        ph = PLACEHOLDER.search(text)
+        ph = PLACEHOLDER.search(HTML_ELEMENT.sub("", text))
         if ph:
             errs.append(f"{path} still contains the placeholder {ph[0]!r}")
         if not re.search(rf"^Task:\s*[`*]*{re.escape(tid)}(?![\w-])", text, re.M):

@@ -127,6 +127,15 @@ class Refusals(Gate):
         self.assertIn("reviews/a/tests.md is empty or too short", err)
         self.assertIn("reviews/a/review.md still contains the placeholder '<YYYY-MM-DD>'", err)
 
+    def test_placeholder_next_to_quoted_html(self):
+        self.tp("claim", "a")
+        self.code()
+        d = self.evidence(commit=False)
+        (d / "review.md").write_text(report("a", "## Review conclusion",
+                                            "The page `<title>Slow</title>` is parsed.\n### CR-1 — <title>\n"))
+        self.commit_all("evidence")
+        self.assertIn("reviews/a/review.md still contains the placeholder '<title>'", self.refused())
+
     def test_wrong_task_metadata(self):
         self.tp("claim", "a")
         self.code()
@@ -230,6 +239,15 @@ class Accepted(Gate):
         d = self.evidence()
         (d / "review.md").write_text(report("a", "## Review conclusion", "Re-read: no material issues.\n"))
         self.commit_all("a: amend review report")
+        self.assertIn("DONE a", self.tp("done", "a").stdout)
+
+    def test_quoted_html_is_not_a_placeholder(self):
+        self.tp("claim", "a")
+        self.code()
+        d = self.evidence(commit=False)
+        (d / "review.md").write_text(report("a", "## Review conclusion",
+                                            "The slow fetch returns `<title>Slow</title>`, so it is parsed.\n"))
+        self.commit_all("a: review evidence")
         self.assertIn("DONE a", self.tp("done", "a").stdout)
 
     def test_evidence_stays_current_when_main_moves(self):
